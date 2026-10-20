@@ -53,7 +53,7 @@ TOOLS = {
     "read_email": read_email,
 }
 # Tools that change real data need the owner's "yes" first. Value = optional check run before asking.
-WRITE_TOOLS = {"create_task": None,"create_event": validate_event}
+WRITE_TOOLS = {"create_event": validate_event}  # EXPERIMENT: approval removed for create_task
 
 # The schema is what the model sees: name + description + JSON Schema for arguments.
 TOOL_DECLARATIONS = [
