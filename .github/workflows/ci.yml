@@ -19,9 +19,9 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
-      - name: Lint (real bugs only: undefined or unused names, syntax errors)
+      - name: "Lint for real bugs (undefined or unused names, syntax errors)"
         run: ruff check app evals tests
-      - name: Offline tests (FakeWorld, scripted model, network blocked)
+      - name: "Offline tests (FakeWorld, scripted model, network blocked)"
         run: pytest -q
 
   secrets:
