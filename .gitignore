@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.env
+.env.*
+!.env.example
+google_client_secret.json
+google_token.json
+*.db
+*.sqlite3
+.DS_Store
+
+# Eval reports: the .md summaries are small and shareable; the .json files hold full traces and get big.
+evals/reports/*.json
