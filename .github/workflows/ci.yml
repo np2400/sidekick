@@ -1,0 +1,36 @@
+# Runs on every push to main and every pull request. If a job fails, GitHub marks the commit red.
+# Only offline checks run here: no API keys, no network calls to models, no cost.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    name: Lint + offline tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Lint (real bugs only: undefined or unused names, syntax errors)
+        run: ruff check app evals tests
+      - name: Offline tests (FakeWorld, scripted model, network blocked)
+        run: pytest -q
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # scan the whole history, not just the latest commit
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

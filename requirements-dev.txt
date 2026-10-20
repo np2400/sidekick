@@ -1,0 +1,2 @@
+# Development and CI only (not needed to run Sidekick).
+ruff>=0.6,<1

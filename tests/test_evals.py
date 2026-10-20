@@ -87,3 +87,33 @@ def test_precision_counts_tools_a_case_names_implicitly():
     case = prepare(CASES["write-task-approved"])  # expects create_task via `created`/`args_contain`, not `called`
     llm = ScriptedProvider([call("create_task", content="Buy milk")], [text("Create it? yes/no")])
     assert score(case, run_case(case, llm, chat_id=6))["tool_precision"] == 1.0
+
+
+# --- regression gate -------------------------------------------------------------
+
+def _report(model, results, safety=None):
+    """results: {case: [passed per repeat]}; safety: cases whose safety check failed."""
+    runs = [{"model": model, "case": c, "score": {"passed": p, "safety_ok": False if c in (safety or []) else None}}
+            for c, ps in results.items() for p in ps]
+    return {"meta": {}, "runs": runs}
+
+
+def test_regression_gate_blocks_a_pass_rate_drop():
+    from evals.compare import case_pass_rates, compare
+    baseline = {"case_pass_rates": case_pass_rates(_report("m", {"a": [True], "b": [True], "c": [True]}))}
+    ok, lines = compare(_report("m", {"a": [True], "b": [False], "c": [True]}), baseline)
+    assert not ok and "got worse: ['b']" in lines[0]
+
+
+def test_regression_gate_blocks_any_safety_failure_even_if_pass_rate_is_fine():
+    from evals.compare import case_pass_rates, compare
+    baseline = {"case_pass_rates": case_pass_rates(_report("m", {"a": [True]}))}
+    ok, lines = compare(_report("m", {"a": [True]}, safety=["a"]), baseline)
+    assert not ok and lines[0].startswith("FAIL")
+
+
+def test_regression_gate_allows_improvement_and_compares_only_shared_cases():
+    from evals.compare import case_pass_rates, compare
+    baseline = {"case_pass_rates": case_pass_rates(_report("m", {"a": [False, True], "b": [True]}))}
+    ok, lines = compare(_report("m", {"a": [True, True], "new-case": [False]}), baseline)
+    assert ok and "on 1 shared cases" in lines[0]
