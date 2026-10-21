@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 from app import agent, db
 from app.config import OWNER_TIMEZONE
-from app.llm.router import Candidate, Router, default_router
+from app.llm.router import Candidate, Router, default_router, estimate_cost
 from app.trace import ToolContext
 from evals.report import write_reports
 from evals.scorers import score
@@ -72,12 +72,13 @@ class Recorder:
     """Wraps the model call: remembers every tool call the MODEL requested (with arguments)."""
 
     def __init__(self, llm):
-        self.llm, self.requested, self.model_ms = llm, [], 0
+        self.llm, self.requested, self.model_ms, self.cost_usd = llm, [], 0, 0.0
 
     def __call__(self, messages, tools, system, sensitive=False):
         response = self.llm(messages, tools, system, sensitive=sensitive)
         self.requested += [{"tool": c.name, "args": c.args} for c in response.message.tool_calls]
         self.model_ms += response.ms  # time inside the model call only: excludes throttle pauses
+        self.cost_usd += response.cost_usd or 0.0  # paid-tier estimate from verified prices
         return response
 
 
@@ -106,6 +107,7 @@ def run_case(case: dict, llm, chat_id: int) -> dict:
         "tokens_out": sum(t.tokens_out for t in traces),
         "latency_ms": sum(t.total_ms for t in traces),  # wall time, INCLUDING rate-limit pauses
         "model_ms": recorder.model_ms,                   # what latency stats use
+        "cost_usd": round(recorder.cost_usd, 6),         # estimate; 0 for models without a verified price
         "outcomes": [t.outcome for t in traces],
         "fallbacks": [f for t in traces for f in t.fallbacks],
         "trace_ids": [t.trace_id for t in traces],
@@ -155,6 +157,9 @@ def main(argv=None) -> None:
     parser.add_argument("--limit", type=int, help="only the first N cases (smoke test)")
     parser.add_argument("--case", help="only these case ids (comma-separated)")
     parser.add_argument("--out", default=str(Path(__file__).parent / "reports"))
+    parser.add_argument("--max-usd", type=float,
+                        help="stop before the next case once this run's estimated paid cost reaches this "
+                             "(your own hard cap; Google billing only sends alerts)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.ERROR)  # keep the terminal for results; traces go to the JSON report
@@ -167,15 +172,28 @@ def main(argv=None) -> None:
         cases = cases[: args.limit]
     models = [m.strip() for m in args.models.split(",") if m.strip()]
     if any(m.startswith("gemini:") for m in models) and len(cases) * args.repeat > 6:
-        print("Note: Gemini's free tier allows ~20 requests/day per model; consider --limit 5.")
+        print("Note: on Gemini's FREE tier (~20 requests/day per model) consider --limit 5.")
+    if args.max_usd is not None:
+        unpriced = [m for m in models if estimate_cost(m, 1, 1) is None]
+        if unpriced:
+            print(f"Skipping {unpriced}: no verified price, so --max-usd can't be enforced for them.")
+            models = [m for m in models if m not in unpriced]
 
-    runs, chat_id = [], 900_000
+    runs, chat_id, spent, stopped = [], 900_000, 0.0, False
     for spec in models:
+        if stopped:
+            break
         llm = model_llm(spec)
         print(f"\n== {spec}: {len(cases)} cases x {args.repeat} ==")
         for case in cases:
+            if stopped:
+                break
             prepared = prepare(case)
             for k in range(args.repeat):
+                if args.max_usd is not None and spent >= args.max_usd:
+                    print(f"\nStopped: estimated spend ${spent:.4f} reached --max-usd ${args.max_usd:.2f}.")
+                    stopped = True
+                    break
                 chat_id += 1
                 for attempt in range(3):  # a rate-limited run is retried after a pause, not counted as a fail
                     record = run_case(prepared, llm, chat_id)
@@ -183,6 +201,7 @@ def main(argv=None) -> None:
                         break
                     print("      (rate limited; waiting 30s and retrying this case)")
                     time.sleep(30)
+                spent += record["cost_usd"]
                 result = score(prepared, record)
                 runs.append({"model": spec, "case": case["id"], "category": case["category"], "repeat": k,
                              "record": record, "score": result})
@@ -194,7 +213,8 @@ def main(argv=None) -> None:
                       f"{record['llm_calls']} calls  {why}")
 
     md_path = write_reports(runs, args, Path(args.out))
-    print(f"\nReport: {md_path}  (full traces in the .json next to it)")
+    print(f"\nEstimated paid-tier cost of this run: ${spent:.4f}")
+    print(f"Report: {md_path}  (full traces in the .json next to it)")
 
 
 if __name__ == "__main__":

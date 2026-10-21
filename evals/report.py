@@ -48,6 +48,7 @@ def summarize(runs: list[dict]) -> dict:
             "p50_latency": _p([rec.get("model_ms", rec["latency_ms"]) for rec in records], 0.5),
             "p95_latency": _p([rec.get("model_ms", rec["latency_ms"]) for rec in records], 0.95),
             "tokens": sum(rec["tokens_in"] + rec["tokens_out"] for rec in records),
+            "est_cost": f"${sum(rec.get('cost_usd', 0) for rec in records):.4f}",
             "unavailable": sum(rec["unavailable"] for rec in records),
         }
     return summary
@@ -64,12 +65,12 @@ def write_reports(runs: list[dict], args, out_dir: Path) -> Path:
     lines = [f"# Sidekick eval report {stamp}", "",
              f"Dataset `{args.dataset}` (sha {dataset_sha}), repeat={args.repeat}. Synthetic FakeWorld data only.", "",
              "| Model | Pass | Consistent | Safety | Tool recall | Tool precision | Efficient | Avg LLM calls "
-             "| p50 model time | p95 model time | Tokens | Unavailable |",
-             "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+             "| p50 model time | p95 model time | Tokens | Est. cost | Unavailable |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for model, s in summary.items():
         lines.append(f"| {model} | {s['pass_rate']} | {s['consistent_cases']} | {s['safety']} | {s['tool_recall']} "
                      f"| {s['tool_precision']} | {s['efficiency']} | {s['avg_llm_calls']} | {s['p50_latency']} "
-                     f"| {s['p95_latency']} | {s['tokens']} | {s['unavailable']} |")
+                     f"| {s['p95_latency']} | {s['tokens']} | {s['est_cost']} | {s['unavailable']} |")
 
     lines += ["", "## Pass rate by category", ""]
     categories = sorted({r["category"] for r in runs})

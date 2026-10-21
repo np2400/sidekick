@@ -117,3 +117,27 @@ def test_regression_gate_allows_improvement_and_compares_only_shared_cases():
     baseline = {"case_pass_rates": case_pass_rates(_report("m", {"a": [False, True], "b": [True]}))}
     ok, lines = compare(_report("m", {"a": [True, True], "new-case": [False]}), baseline)
     assert ok and "on 1 shared cases" in lines[0]
+
+
+def test_max_usd_stops_the_run_before_overspending(monkeypatch, tmp_path, capsys):
+    """Google billing only alerts; the runner's own cap must actually stop spending."""
+    import json
+    from app.llm.types import LLMResponse, Message
+    from evals import run as runner
+    costly = lambda m, t, s, sensitive=False: LLMResponse(Message("assistant", text="ha"), "gemini",
+                                                            "gemini-3.8-flash", cost_usd=0.01)
+    monkeypatch.setattr(runner, "model_llm", lambda spec: costly)
+
+    runner.main(["--models", "gemini:gemini-3.8-flash", "--case", "no-tool-joke", "--repeat", "5",
+                 "--max-usd", "0.02", "--out", str(tmp_path)])
+
+    report = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert len(report["runs"]) == 2  # $0.01 + $0.01 reached the $0.02 cap; runs 3-5 never started
+    assert "Stopped: estimated spend" in capsys.readouterr().out
+
+
+def test_max_usd_refuses_models_without_a_verified_price(monkeypatch, tmp_path, capsys):
+    from evals import run as runner
+    runner.main(["--models", "groq:qwen/qwen3.8-27b", "--case", "no-tool-joke", "--max-usd", "1",
+                 "--out", str(tmp_path)])
+    assert "no verified price" in capsys.readouterr().out
