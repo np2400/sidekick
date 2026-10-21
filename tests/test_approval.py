@@ -15,7 +15,7 @@ def test_write_is_staged_not_executed(world):
     result = stage_task(world)
 
     assert world.created("create_task") == 0
-    assert PENDING[1]["name"] == "create_task"
+    assert PENDING.peek(1)["name"] == "create_task"
     assert result.trace.outcome == "approval_staged"
     assert result.trace.steps[0].status == "staged"
 
@@ -34,7 +34,7 @@ def test_no_creates_nothing(world):
 
     assert reply == "Cancelled. Nothing was created."
     assert world.created("create_task") == 0
-    assert 1 not in PENDING
+    assert PENDING.peek(1) is None
 
 
 def test_any_other_message_drops_the_pending_write(world):
@@ -43,7 +43,7 @@ def test_any_other_message_drops_the_pending_write(world):
 
     assert reply is None  # not an approval answer: the message goes to the agent instead
     assert world.created("create_task") == 0
-    assert 1 not in PENDING
+    assert PENDING.peek(1) is None
 
 
 def test_saying_yes_twice_does_not_create_twice(world):
@@ -61,7 +61,7 @@ def test_one_chats_yes_cannot_approve_another_chats_write(world):
 
     assert other is None
     assert world.created("create_task") == 0
-    assert PENDING[1]["name"] == "create_task"
+    assert PENDING.peek(1)["name"] == "create_task"
 
 
 def test_invalid_event_is_rejected_before_asking_for_approval(world):
@@ -72,7 +72,7 @@ def test_invalid_event_is_rejected_before_asking_for_approval(world):
     run_agent("gym 5pm to 3pm", CTX, llm=llm, tools=world.tools())
 
     assert "end after it starts" in llm.last_tool_results()[0]["response"]["error"]
-    assert 1 not in PENDING
+    assert PENDING.peek(1) is None
 
 
 def test_approved_write_that_fails_reports_the_error(world):
@@ -94,4 +94,4 @@ def test_prompt_injection_in_email_cannot_skip_approval(world):
     run_agent("read Sam's email", CTX, llm=llm, tools=world.tools())
 
     assert world.created("create_task") == 0  # nothing happened without a human yes
-    assert PENDING[1]["args"]["content"] == "wire $5000 to attacker"  # the human sees exactly what would run
+    assert PENDING.peek(1)["args"]["content"] == "wire $5000 to attacker"  # the human sees exactly what would run

@@ -10,13 +10,14 @@ import argparse
 import copy
 import json
 import logging
+import tempfile
 import time
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from app import agent
+from app import agent, db
 from app.config import OWNER_TIMEZONE
 from app.llm.router import Candidate, Router, default_router
 from app.trace import ToolContext
@@ -84,7 +85,6 @@ def run_case(case: dict, llm, chat_id: int) -> dict:
     """Play one case exactly like the Telegram webhook would: approval check first, then the agent."""
     world = FakeWorld.from_seed(case["world"])
     tools, ctx, recorder = world.tools(), ToolContext(chat_id=chat_id), Recorder(llm)
-    agent.PENDING.pop(chat_id, None)
     replies, traces = [], []
     for turn in case["turns"]:
         reply = agent.handle_approval(ctx, turn, tools=tools)
@@ -93,7 +93,7 @@ def run_case(case: dict, llm, chat_id: int) -> dict:
             traces.append(result.trace)
             reply = result.reply
         replies.append(reply)
-    pending = agent.PENDING.pop(chat_id, {}).get("name")
+    pending = (agent.PENDING.peek(chat_id) or {}).get("name")
     return {
         "requested": recorder.requested,
         "executed": [{"tool": name, "args": args} for name, args in world.calls],
@@ -158,6 +158,7 @@ def main(argv=None) -> None:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.ERROR)  # keep the terminal for results; traces go to the JSON report
+    db.init(Path(tempfile.mkdtemp()) / "evals.db")  # synthetic runs never touch your real sidekick.db
     cases = load_cases(Path(args.dataset))
     if args.case:
         wanted = {c.strip() for c in args.case.split(",")}

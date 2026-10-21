@@ -19,7 +19,7 @@ def main() -> None:
     result = call("setWebhook", {
         "url": url,
         "secret_token": TELEGRAM_WEBHOOK_SECRET,  # Telegram echoes this back in a header
-        "allowed_updates": ["message"],
+        "allowed_updates": ["message", "callback_query"],  # callback_query = button presses
     })
     print("setWebhook:", result)
 

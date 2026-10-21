@@ -7,6 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.config import OWNER_TIMEZONE
+from app.db.store import PendingStore, log_action
 from app.gcal import create_event, list_events, validate_event
 from app.gmail import read_email, search_emails
 from app.llm.router import AllProvidersFailed, default_router
@@ -154,9 +155,8 @@ TOOL_DECLARATIONS = [
 # Tools borrowed from external MCP servers (read-only, e.g. web_fetch) are added by
 # discover_mcp_tools() on the first message; see app/mcp_client.py.
 
-# Write actions waiting for approval, keyed by Telegram chat id. In memory only:
-# a server restart forgets them, which is acceptable for a one-person prototype.
-PENDING: dict[int, dict] = {}
+# Write actions waiting for approval, one per chat, stored in SQLite so a restart doesn't lose them.
+PENDING = PendingStore()
 
 
 def run_tool(name: str, args: dict, ctx: ToolContext, tools: dict) -> dict:
@@ -182,7 +182,7 @@ def run_tool(name: str, args: dict, ctx: ToolContext, tools: dict) -> dict:
         problem = check(**args) if check else None
         if problem:
             return {"error": problem}
-        PENDING[ctx.chat_id] = {"name": name, "args": args}
+        PENDING.stage(ctx.chat_id, ctx.user_id, name, args)
         return {"status": "awaiting_owner_approval", "will_run": {"tool": name, "args": args}}
     return _safely(name, tool, args)
 
@@ -194,7 +194,9 @@ def _safely(name: str, tool, args: dict) -> dict:
         return tool(**args)
     except Exception as exc:
         log.error("Tool %s crashed: %s", name, type(exc).__name__)
-        return {"error": f"{name} failed ({type(exc).__name__}). Try again later."}
+        # Worded for the MODEL: "try again later" made one model retry in a loop until the step limit.
+        return {"error": f"{name} failed ({type(exc).__name__}): the service is unavailable right now. "
+                         "Do not retry; tell the user it failed."}
 
 
 def log_safe(result: dict) -> dict:
@@ -215,27 +217,48 @@ NO = {"no", "n", "cancel", "stop", "👎"}
 
 
 def handle_approval(ctx: ToolContext, text: str, tools: dict | None = None) -> str | None:
-    """Plain Python (not the LLM) decides whether a pending write runs.
-
-    Returns a reply if this message answered a pending request, otherwise None.
-    """
-    tools = TOOLS if tools is None else tools
-    pending = PENDING.pop(ctx.chat_id, None)
-    if pending is None:
+    """A typed reply while something is pending. Returns a reply if it answered the request, otherwise None."""
+    if PENDING.peek(ctx.chat_id) is None:
         return None
     answer = text.strip().lower().rstrip(".!")
     if answer in YES:
-        log.info("Owner approved %s(%s)", pending["name"], ", ".join(sorted(pending["args"])))
-        log.debug("Approved args: %s", json.dumps(pending["args"]))
-        result = _safely(pending["name"], tools[pending["name"]], pending["args"])
-        log.info("Approved %s returned %s", pending["name"], json.dumps(log_safe(result)))
-        if "error" in result:
-            return f"❌ {result['error']}"
-        return f"✅ {result['summary']}"  # built from the API's real response, not the LLM
-    log.info("Owner did not approve %s", pending["name"])
+        return decide(ctx, approve=True, tools=tools)
     if answer in NO:
+        return decide(ctx, approve=False, tools=tools)
+    # Some other message: drop the pending action and treat this as a new request.
+    dropped = PENDING.claim(ctx.chat_id)
+    if dropped:
+        PENDING.finish(dropped["id"], "dropped")
+        log_action(ctx.user_id, ctx.chat_id, "dropped", dropped["name"])
+    return None
+
+
+def decide(ctx: ToolContext, approve: bool, action_id: int | None = None, tools: dict | None = None) -> str:
+    """Plain Python (not the LLM) decides whether a pending write runs, and it runs at most once.
+
+    `action_id` comes from a button: it must match the CURRENT proposal, so an old button can't approve
+    a newer action. Two taps (or a retried request) race for claim(); only one wins.
+    """
+    tools = TOOLS if tools is None else tools
+    pending = PENDING.claim(ctx.chat_id, action_id)
+    if pending is None:
+        return "That request was already handled or replaced."
+    if not approve:
+        PENDING.finish(pending["id"], "rejected")
+        log_action(ctx.user_id, ctx.chat_id, "rejected", pending["name"])
+        log.info("Owner did not approve %s", pending["name"])
         return "Cancelled. Nothing was created."
-    return None  # some other message: drop the pending action and treat this as a new request
+    log.info("Owner approved %s(%s)", pending["name"], ", ".join(sorted(pending["args"])))
+    log.debug("Approved args: %s", json.dumps(pending["args"]))
+    result = _safely(pending["name"], tools[pending["name"]], pending["args"])
+    log.info("Approved %s returned %s", pending["name"], json.dumps(log_safe(result)))
+    if "error" in result:
+        PENDING.finish(pending["id"], "failed")
+        log_action(ctx.user_id, ctx.chat_id, "failed", pending["name"], result["error"][:200])
+        return f"❌ {result['error']}"
+    PENDING.finish(pending["id"], "executed")
+    log_action(ctx.user_id, ctx.chat_id, "executed", pending["name"], result.get("summary"))
+    return f"✅ {result['summary']}"  # built from the API's real response, not the LLM
 
 
 # --- The loop -------------------------------------------------------------------
@@ -291,6 +314,8 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
             started = time.time()
             result = run_tool(call.name, call.args, ctx, tools)
             trace.record_tool(call.name, call.args, result, started)
+            log_action(ctx.user_id, ctx.chat_id, trace.steps[-1].status.replace("ok", "read"), call.name,
+                       trace_id=trace.trace_id)
             log.debug("Step %d: %s returned %s", step, call.name, json.dumps(log_safe(result)))
             sensitive = sensitive or call.name in SENSITIVE_TOOLS
             messages.append(Message(role="tool", tool_call_id=call.id, tool_name=call.name, result=result))

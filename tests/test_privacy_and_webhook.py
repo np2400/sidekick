@@ -52,7 +52,7 @@ def client(monkeypatch):
     monkeypatch.setattr(main, "TELEGRAM_WEBHOOK_SECRET", "test-secret")
     monkeypatch.setattr(main, "TELEGRAM_OWNER_ID", str(OWNER))
     sent, agent_calls = [], []
-    monkeypatch.setattr(main, "send_message", lambda chat_id, reply: sent.append((chat_id, reply)))
+    monkeypatch.setattr(main, "send_message", lambda chat_id, reply, buttons=None: sent.append((chat_id, reply)))
     monkeypatch.setattr(main, "run_agent", lambda text, ctx: agent_calls.append(text) or AgentResult("hi!", Trace()))
     c = TestClient(main.app)
     c.sent, c.agent_calls = sent, agent_calls
@@ -106,7 +106,7 @@ def test_brief_falls_back_to_plain_version_when_ai_is_down(monkeypatch):
 def test_every_line_of_one_request_shares_one_id_and_the_trace_uses_it(monkeypatch, caplog):
     monkeypatch.setattr(main, "TELEGRAM_WEBHOOK_SECRET", "test-secret")
     monkeypatch.setattr(main, "TELEGRAM_OWNER_ID", str(OWNER))
-    monkeypatch.setattr(main, "send_message", lambda chat_id, reply: None)
+    monkeypatch.setattr(main, "send_message", lambda chat_id, reply, buttons=None: None)
     traces = []
     monkeypatch.setattr(main, "run_agent", lambda text, ctx: traces.append(Trace()) or AgentResult("ok", traces[-1]))
     caplog.set_level(logging.INFO)

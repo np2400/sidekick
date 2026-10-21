@@ -1,9 +1,15 @@
 """Shared fixtures: every test is isolated and offline."""
+import os
 import socket
+import tempfile
 
-import pytest
+# Point the app at a throwaway database before any app module reads its config,
+# so importing app.main never touches your real sidekick.db.
+os.environ["SIDEKICK_DB"] = os.path.join(tempfile.mkdtemp(), "import-time.db")
 
-from app import agent
+import pytest  # noqa: E402
+
+from app import agent, db  # noqa: E402
 from tests.fakes import FakeWorld
 
 
@@ -17,15 +23,11 @@ def no_network(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def clean_state(monkeypatch):
-    """Module-level state must not leak between tests."""
-    agent.PENDING.clear()
-    from app import main
-    main._recent_updates.clear()
+def clean_state(monkeypatch, tmp_path):
+    """Every test gets its own empty database, so no state leaks between tests."""
+    db.init(tmp_path / "test.db")
     # Borrowed MCP tools would start a subprocess: tests stay hermetic with none.
     monkeypatch.setattr(agent, "discover_mcp_tools", lambda: ({}, []))
-    yield
-    agent.PENDING.clear()
 
 
 @pytest.fixture

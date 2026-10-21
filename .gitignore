@@ -8,6 +8,7 @@ __pycache__/
 google_client_secret.json
 google_token.json
 *.db
+*.db-*
 *.sqlite3
 .DS_Store
 
