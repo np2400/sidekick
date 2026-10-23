@@ -14,3 +14,10 @@ google_token.json
 
 # Eval reports: the .md summaries are small and shareable; the .json files hold full traces and get big.
 evals/reports/*.json
+
+# Docker data folder (database + Google tokens for the container)
+data/
+
+# Private keys (e.g. an AWS .pem) must never be committed
+*.pem
+*.key

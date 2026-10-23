@@ -1,0 +1,21 @@
+# Never copy secrets or data into the image; they're supplied at run time.
+.env
+.env.*
+google_*.json
+*.db
+*.db-*
+data/
+# Not needed to run Sidekick.
+.venv/
+.git/
+.github/
+tests/
+evals/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.md
+
+# Private keys must never end up inside an image
+**/*.pem
+**/*.key

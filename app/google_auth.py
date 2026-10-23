@@ -12,14 +12,14 @@ import time
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 
 import httpx
 
+from app.config import DATA_DIR
+
 log = logging.getLogger("sidekick.google")
-ROOT = Path(__file__).resolve().parent.parent
-CLIENT_FILE = ROOT / "google_client_secret.json"  # identifies the app (from Google Cloud)
-TOKEN_FILE = ROOT / "google_token.json"           # identifies YOU (created by authorize())
+CLIENT_FILE = DATA_DIR / "google_client_secret.json"  # identifies the app (from Google Cloud)
+TOKEN_FILE = DATA_DIR / "google_token.json"           # identifies YOU (created by authorize())
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",  # read + write events, nothing else
     "https://www.googleapis.com/auth/gmail.readonly",   # read mail only: no send, no delete

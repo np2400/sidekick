@@ -1,0 +1,12 @@
+# docker compose up -d  : build (if needed) and start Sidekick in the background
+# docker compose logs -f: follow its logs      docker compose down: stop it
+services:
+  sidekick:
+    build: .
+    image: sidekick:local
+    env_file: .env                 # secrets come from .env at run time, never from the image
+    volumes:
+      - ./data:/data               # the "locker": database + Google tokens survive rebuilds
+    ports:
+      - "127.0.0.1:8000:8000"      # only this machine can reach it; the tunnel (or Caddy, later) sits in front
+    restart: unless-stopped        # come back after crashes and reboots

@@ -35,8 +35,10 @@ SCHEDULER_ENABLED = os.getenv("SIDEKICK_SCHEDULER", "1") != "0"
 
 OWNER_TIMEZONE = os.getenv("OWNER_TIMEZONE") or "America/Los_Angeles"
 
-# SQLite file for state that must survive restarts (gitignored). In Docker this will live on a volume.
-DB_PATH = os.getenv("SIDEKICK_DB") or str(ENV_FILE.parent / "sidekick.db")
+# Everything that must survive restarts and redeploys lives in one folder: the database and the Google
+# token files. Locally that's the project folder; in Docker it's /data, a volume outside the container.
+DATA_DIR = Path(os.getenv("SIDEKICK_DATA_DIR") or ENV_FILE.parent)
+DB_PATH = os.getenv("SIDEKICK_DB") or str(DATA_DIR / "sidekick.db")
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
