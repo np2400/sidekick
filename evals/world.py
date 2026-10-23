@@ -11,10 +11,11 @@ CRASHES = {"ReadTimeout": httpx.ReadTimeout, "ConnectError": httpx.ConnectError}
 class FakeWorld:
     """In-memory accounts. Every tool call is recorded in `self.calls`."""
 
-    def __init__(self, tasks=None, events=None, emails=None):
+    def __init__(self, tasks=None, events=None, emails=None, reminders=None):
         self.tasks = list(tasks or [])
         self.events = list(events or [])
-        self.emails = list(emails or [])  # dicts: id, from, subject, date, snippet, body
+        self.emails = list(emails or [])
+        self.reminders = list(reminders or [])  # dicts: id, text, next, repeat  # dicts: id, from, subject, date, snippet, body
         self.calls: list[tuple[str, dict]] = []
         self.failures: dict[str, object] = {}  # tool name -> error dict to return, or Exception to raise
 
@@ -43,6 +44,9 @@ class FakeWorld:
             "create_event": self.create_event,
             "search_emails": self.search_emails,
             "read_email": self.read_email,
+            "create_reminder": self.create_reminder,
+            "list_reminders": self.list_reminders,
+            "cancel_reminder": self.cancel_reminder,
         }
 
     def get_current_time(self, timezone: str = "America/Los_Angeles") -> dict:
@@ -87,10 +91,29 @@ class FakeWorld:
                 return {"from": e["from"], "subject": e["subject"], "date": e["date"], "body": e["body"]}
         return {"error": f"No email with id {message_id}."}
 
+    def create_reminder(self, text: str, remind_at: str, repeat: str = "none") -> dict:
+        error = self._enter("create_reminder", {"text": text, "remind_at": remind_at, "repeat": repeat})
+        if error:
+            return error
+        rid = len(self.reminders) + 1
+        self.reminders.append({"id": rid, "text": text, "next": remind_at, "repeat": repeat})
+        return {"summary": f"Reminder set: {text} ({remind_at})", "reminder_id": rid, "when": remind_at}
+
+    def list_reminders(self) -> dict:
+        return self._enter("list_reminders", {}) or {"count": len(self.reminders), "reminders": list(self.reminders)}
+
+    def cancel_reminder(self, reminder_id: int) -> dict:
+        error = self._enter("cancel_reminder", {"reminder_id": reminder_id})
+        if error:
+            return error
+        self.reminders = [r for r in self.reminders if r["id"] != reminder_id]
+        return {"summary": f"Cancelled reminder {reminder_id}"}
+
     @classmethod
     def from_seed(cls, seed: dict) -> "FakeWorld":
         """Build a world from a dataset case's `world` field (JSON-friendly)."""
-        world = cls(tasks=seed.get("tasks"), events=seed.get("events"), emails=seed.get("emails"))
+        world = cls(tasks=seed.get("tasks"), events=seed.get("events"), emails=seed.get("emails"),
+                    reminders=seed.get("reminders"))
         for tool, failure in (seed.get("fail") or {}).items():
             if "raise" in failure:  # {"raise": "ReadTimeout"} -> the tool crashes with that exception
                 world.fail(tool, CRASHES[failure["raise"]](f"simulated {failure['raise']}"))

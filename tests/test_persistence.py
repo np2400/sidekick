@@ -20,7 +20,9 @@ def test_migrations_run_once_even_if_init_is_called_again(tmp_path):
     path = db.init(tmp_path / "x.db")
     db.init(path)
     with db.connect() as conn:
-        assert [r[0] for r in conn.execute("SELECT version FROM schema_version")] == [1]
+        applied = [r[0] for r in conn.execute("SELECT version FROM schema_version ORDER BY version")]
+    expected = sorted(int(f.name.split("_")[0]) for f in db.MIGRATIONS.glob("*.sql"))
+    assert applied == expected  # every migration exactly once
 
 
 def test_pending_approval_survives_a_restart(world, tmp_path):

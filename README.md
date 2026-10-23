@@ -4,17 +4,19 @@
 
 A personal AI assistant you text on Telegram. Ask it about your day, your calendar or your inbox, have it read a web page, or tell it to add something to your list. It **asks for your approval before it creates anything**.
 
-No sign-up: your Telegram account is your identity. Calendar, Gmail and Todoist are optional connections you turn on if you use them. Built-in tasks and reminders that need no other app are next on the roadmap; today, tasks are saved to Todoist.
+No sign-up: your Telegram account is your identity. Tasks and reminders are built in, so you don't need any other app. Calendar, Gmail and Todoist are optional connections you turn on if you use them.
 
 Built from scratch in Python (FastAPI), with no agent framework: a hand-written tool-calling loop, a provider-neutral model router, an offline test suite and a live evaluation harness.
 
-> Status: working personal prototype (single user, runs locally behind a tunnel). Next: built-in tasks and reminders, a database, deployment, then a small invite-only beta.
+> Status: working personal prototype (single user, runs locally behind a tunnel). Next: deployment so it runs 24/7, then a small invite-only beta.
 
 ## What it does
 
 - **Chat on Telegram:** "What's on my calendar tomorrow?", "Add a task to call the dentist", "Summarize Sam's latest email", "/brief".
-- **Approval before writes:** the model can only *propose* a task or event; code holds it until you reply yes.
-- **Optional integrations:** Google Calendar and Gmail read-only (OAuth 2.0 with PKCE), Todoist (API token), web pages through the Fetch MCP server.
+- **Reminders on Telegram:** "Remind me to call Dad tomorrow at 10", "every weekday at 9am". They arrive with Done, Snooze 1 hour and Tomorrow buttons, and survive restarts.
+- **Built-in task list** stored in Sidekick's own database (or Todoist, if you prefer).
+- **Approval before outside writes:** the model can only *propose* a task or calendar event; code holds it until you tap ✅. Your own reminders are created immediately with an Undo button.
+- **Optional integrations:** Google Calendar and Gmail read-only (OAuth 2.0 with PKCE), Todoist (API token, `TASK_BACKEND=todoist`), web pages through the Fetch MCP server.
 - **MCP both ways:** Sidekick uses an external MCP server, and exposes its own read-only tools to MCP clients.
 
 ## How it works

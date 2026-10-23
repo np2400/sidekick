@@ -96,7 +96,7 @@ def test_brief_falls_back_to_plain_version_when_ai_is_down(monkeypatch):
              "events": {"count": 1, "events": [{"summary": "Gym", "start": "2026-10-20T07:00:00-07:00"}]},
              "tasks": {"count": 0, "tasks": []},
              "unread_email_last_24h": {"count": 4, "emails": []}}
-    monkeypatch.setattr(brief, "gather", lambda days_ahead=0: facts)
+    monkeypatch.setattr(brief, "gather", lambda days_ahead=0, ctx=None: facts)
     out = brief.build_brief(llm=ScriptedProvider(AllProvidersFailed([])))
     assert "plain version" in out and "07:00 Gym" in out and "4 unread" in out
 

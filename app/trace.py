@@ -85,3 +85,4 @@ class Trace:
 class AgentResult:
     reply: str
     trace: Trace
+    undo_reminder_id: int | None = None  # a reminder created this turn gets an Undo button

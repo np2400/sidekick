@@ -1,16 +1,17 @@
 """Sidekick: local API + Telegram webhook + model-agnostic agent (Gemini + Groq via the router)."""
 import logging
 import secrets
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from app import db
+from app import db, reminders
 from app.agent import PENDING, decide, handle_approval, run_agent
 from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
-from app.config import OWNER_TIMEZONE, TELEGRAM_OWNER_ID, TELEGRAM_WEBHOOK_SECRET
+from app.config import OWNER_TIMEZONE, SCHEDULER_ENABLED, TELEGRAM_OWNER_ID, TELEGRAM_WEBHOOK_SECRET
 from app.db.store import first_time_seen, recent_actions
 from app.logging_setup import RequestIdMiddleware, setup_logging
 from app.telegram import answer_button, approval_buttons, remove_buttons, send_message
@@ -20,7 +21,20 @@ setup_logging()  # timestamp + request id on every line; LOG_LEVEL=DEBUG shows c
 log = logging.getLogger("sidekick")
 db.init()  # create or upgrade the SQLite schema before handling any request
 
-app = FastAPI(title="Sidekick: fresh start")
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    """Start the reminder scheduler with the server, stop it on shutdown."""
+    scheduler = reminders.Scheduler(send_message) if SCHEDULER_ENABLED else None
+    if scheduler:
+        scheduler.start()
+    yield
+    if scheduler:
+        scheduler.stop()
+
+
+app = FastAPI(title="Sidekick", lifespan=lifespan)
 app.add_middleware(RequestIdMiddleware)
 
 
@@ -86,9 +100,11 @@ def telegram_webhook(
     buttons = None
     if command in BRIEF_TRIGGERS or command in TOMORROW_TRIGGERS:
         # Fixed command: Python gathers facts, the model only writes the summary.
-        reply = build_brief(days_ahead=1 if command in TOMORROW_TRIGGERS else 0)
+        reply = build_brief(days_ahead=1 if command in TOMORROW_TRIGGERS else 0, ctx=ctx)
     elif command == "/history":
         reply = history_text(chat_id)
+    elif command == "/reminders":
+        reply = reminders_text(ctx)
     else:
         reply = handle_approval(ctx, text)
         if reply is None:
@@ -97,12 +113,27 @@ def telegram_webhook(
             reply = result.reply
             if result.trace.outcome == "approval_staged" and (pending := PENDING.peek(chat_id)):
                 buttons = approval_buttons(pending["id"])  # ✅ / ❌ under the proposal
+            elif result.undo_reminder_id:
+                buttons = [("↩️ Undo", f"undo:{result.undo_reminder_id}")]  # reminders: created now, undoable
     send_message(chat_id, reply, buttons=buttons)
     return {"ok": True}
 
 
+BUTTONS = {
+    "approve": lambda chat_id, n: decide(ToolContext(chat_id=chat_id), approve=True, action_id=n),
+    "reject": lambda chat_id, n: decide(ToolContext(chat_id=chat_id), approve=False, action_id=n),
+    "done": lambda chat_id, n: reminders.mark_done(n, chat_id),
+    "snooze": lambda chat_id, n: reminders.snooze(n, chat_id, timedelta(hours=1)),
+    "tomorrow": lambda chat_id, n: reminders.snooze(n, chat_id, timedelta(days=1)),
+    "undo": lambda chat_id, n: reminders.undo(n, chat_id),
+}  # every action: (chat_id, item_id) -> reply text
+
+
 def handle_button(query: dict) -> None:
-    """✅ / ❌ pressed. Same rules as typing yes/no: owner only, and the action runs at most once."""
+    """A button was tapped: ✅/❌ on a proposal, or Done/Snooze/Tomorrow/Undo on a reminder.
+
+    Same rules as typed messages: owner only, and each action checks the item belongs to this chat.
+    """
     sender_id = str(query.get("from", {}).get("id", ""))
     message = query.get("message") or {}
     chat_id = message.get("chat", {}).get("id")
@@ -110,14 +141,24 @@ def handle_button(query: dict) -> None:
     if sender_id != TELEGRAM_OWNER_ID or chat_id is None:
         answer_button(query["id"])
         return
-    choice, _, action_id = (query.get("data") or "").partition(":")
-    if choice not in ("approve", "reject") or not action_id.isdigit():
+    choice, _, item_id = (query.get("data") or "").partition(":")
+    if choice not in BUTTONS or not item_id.isdigit():
         answer_button(query["id"], "Unknown button")
         return
-    reply = decide(ToolContext(chat_id=chat_id), approve=choice == "approve", action_id=int(action_id))
+    reply = BUTTONS[choice](chat_id, int(item_id))
     answer_button(query["id"])                          # stop the spinner on the button
-    remove_buttons(chat_id, message.get("message_id"))  # the proposal can't be tapped again
+    remove_buttons(chat_id, message.get("message_id"))  # each button works once
     send_message(chat_id, reply)
+
+
+def reminders_text(ctx: ToolContext) -> str:
+    """/reminders: upcoming reminders, read straight from SQLite (no AI call)."""
+    items = reminders.list_reminders(ctx=ctx)["reminders"]
+    if not items:
+        return "No upcoming reminders. Try: remind me to call Dad tomorrow at 10."
+    lines = [f"#{r['id']}  {r['next']}  {r['text']}" + (f"  (repeats {r['repeat']})" if r["repeat"] != "none" else "")
+             for r in items]
+    return "Upcoming reminders:\n" + "\n".join(lines)
 
 
 def history_text(chat_id: int) -> str:

@@ -25,6 +25,13 @@ TELEGRAM_OWNER_ID = os.getenv("TELEGRAM_OWNER_ID", "")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 TODOIST_API_TOKEN = os.getenv("TODOIST_API_TOKEN", "")
+# Where tasks live. Default "native": Sidekick's own database, no account needed, for everyone.
+# Set TASK_BACKEND=todoist to use a Todoist account instead (needs TODOIST_API_TOKEN).
+TASK_BACKEND = os.getenv("TASK_BACKEND") or "native"
+# Reminder scheduler: how often it checks for due reminders, and an off switch for tests and evals.
+# Reminders arrive 0 to this many seconds late. Each check is one tiny SQLite query, so 10s costs nothing.
+REMINDER_POLL_SECONDS = float(os.getenv("REMINDER_POLL_SECONDS") or 10)
+SCHEDULER_ENABLED = os.getenv("SIDEKICK_SCHEDULER", "1") != "0"
 
 OWNER_TIMEZONE = os.getenv("OWNER_TIMEZONE") or "America/Los_Angeles"
 

@@ -6,6 +6,7 @@ import tempfile
 # Point the app at a throwaway database before any app module reads its config,
 # so importing app.main never touches your real sidekick.db.
 os.environ["SIDEKICK_DB"] = os.path.join(tempfile.mkdtemp(), "import-time.db")
+os.environ["SIDEKICK_SCHEDULER"] = "0"  # no background reminder thread during tests (tests call tick() directly)
 
 import pytest  # noqa: E402
 
