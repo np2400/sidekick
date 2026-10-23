@@ -8,5 +8,22 @@ services:
     volumes:
       - ./data:/data               # the "locker": database + Google tokens survive rebuilds
     ports:
-      - "127.0.0.1:8000:8000"      # only this machine can reach it; the tunnel (or Caddy, later) sits in front
+      - "127.0.0.1:8000:8000"      # only this machine can reach it; the tunnel (or Caddy) sits in front
     restart: unless-stopped        # come back after crashes and reboots
+
+  # Server only: HTTPS front door. Starts when .env has COMPOSE_PROFILES=public and SIDEKICK_DOMAIN=...
+  caddy:
+    image: caddy:2.10-alpine
+    profiles: [public]
+    environment:
+      SIDEKICK_DOMAIN: ${SIDEKICK_DOMAIN:-}
+    ports:
+      - "80:80"                    # Let's Encrypt checks you own the domain here; then redirects to 443
+      - "443:443"                  # HTTPS: what Telegram connects to
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data           # certificates: keep them, or Let's Encrypt rate-limits re-issuing
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
