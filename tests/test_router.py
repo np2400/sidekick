@@ -2,7 +2,7 @@
 import pytest
 
 from app.llm.router import AllProvidersFailed, Candidate, Router, estimate_cost, parse_candidates
-from app.llm.types import LLMResponse, Message, ProviderError
+from app.llm.types import LLMResponse, Message, ProviderError, classify_status
 
 
 class FakeAdapter:
@@ -82,6 +82,15 @@ def test_circuit_breaker_skips_a_failed_model_then_tries_it_again_after_cooldown
     clock.now += 301                                    # cooldown over
     r = router.complete(MSG, [], "sys")
     assert r.provider == "gemini" and len(gemini.calls) == 2
+
+
+def test_too_large_request_falls_back_without_benching_the_model():
+    assert classify_status(413) == "too_large"  # Groq: request bigger than the free tokens-per-minute limit
+    gemini, groq = FakeAdapter("gemini", "too_large"), FakeAdapter("groq")
+    router, _ = make([gemini, groq], [A, B])
+
+    assert router.complete(MSG, [], "sys").provider == "groq"
+    assert router.complete(MSG, [], "sys").provider == "gemini"  # next, normal-sized request: no breaker
 
 
 def test_last_resort_is_always_tried_even_with_breaker_open():

@@ -35,7 +35,7 @@ class Message:
 class Attempt:
     """One failed or skipped try, kept so the trace can show the fallback path."""
     candidate: str  # "provider:model"
-    kind: str       # rate_limit | overloaded | timeout | network | auth | bad_request | bad_response | skipped
+    kind: str       # rate_limit | overloaded | timeout | network | auth | too_large | bad_request | bad_response | skipped
     ms: int = 0
 
 
@@ -67,4 +67,6 @@ def classify_status(status: int) -> str:
         return "overloaded"
     if status in (401, 403):
         return "auth"
+    if status == 413:
+        return "too_large"  # e.g. Groq free tier: one request bigger than the model's tokens-per-minute limit
     return "bad_request"  # 400/404/...: our request is wrong for this provider

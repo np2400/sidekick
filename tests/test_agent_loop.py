@@ -69,6 +69,17 @@ def test_step_limit_stops_a_runaway_loop(world):
     assert "stuck" in result.reply
 
 
+def test_web_tools_have_a_per_message_budget():
+    searches = []
+    tools = {"web_search": lambda query, recent="", max_results=5: searches.append(query) or {"results": []}}
+    llm = ScriptedProvider(*[[call("web_search", query=f"q{i}")] for i in range(3)], [text("Sunny.")])
+    result = run_agent("weather this weekend?", CTX, llm=llm, tools=tools)
+
+    assert searches == ["q0", "q1"]  # the third search was refused, not run
+    assert "Limit reached" in llm.received[-1][-1].result["error"]
+    assert result.reply == "Sunny."
+
+
 def test_tool_error_result_is_passed_to_the_model(world):
     world.fail("list_tasks", {"error": "Todoist rejected the API token (401)."})
     llm = ScriptedProvider([call("list_tasks")], [text("Your Todoist connection needs fixing.")])

@@ -99,6 +99,8 @@ class Router:
                 response.attempts = attempts
                 response.cost_usd = estimate_cost(c.key, response.tokens_in, response.tokens_out)
                 return response
+            if attempts[-1].kind == "too_large":
+                continue  # this request was too big for it; the model itself is fine for the next one
             self.skip_until[c.key] = self.clock() + self.cooldown
             log.warning("LLM %s unavailable, skipping it for %ds", c.key, self.cooldown)
         raise AllProvidersFailed(attempts)
