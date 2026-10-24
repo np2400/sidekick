@@ -1,0 +1,13 @@
+# Litestream: copies every change to sidekick.db to S3 within seconds, so losing the server loses
+# (almost) nothing. Settings come from the server's .env; see compose.yaml.
+dbs:
+  - path: /data/sidekick.db
+    replica:
+      url: ${SIDEKICK_BACKUP_URL}        # e.g. s3://my-bucket/sidekick
+      region: ${SIDEKICK_BACKUP_REGION}  # e.g. us-east-2
+      sync-interval: 10s                 # at most one upload per 10s, and only when something changed
+
+# A full copy once a day; keep a week of history so a bad change noticed days later can be undone.
+snapshot:
+  interval: 24h
+  retention: 168h

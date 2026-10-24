@@ -16,6 +16,14 @@ def main() -> None:
     print("Bot:", me.get("result", {}).get("username") if me.get("ok") else me)
 
     url = sys.argv[1].rstrip("/") + "/telegram/webhook"
+    # Telegram delivers to ONE address. Pointing it at a laptop tunnel silently takes the bot away from
+    # the server, so replacing a different address needs an explicit yes.
+    current = call("getWebhookInfo", {}).get("result", {}).get("url", "")
+    if current and current != url:
+        answer = input(f"Telegram currently delivers to {current}\nReplace it with {url}? [y/N] ")
+        if answer.strip().lower() != "y":
+            sys.exit("Not changed.")
+
     result = call("setWebhook", {
         "url": url,
         "secret_token": TELEGRAM_WEBHOOK_SECRET,  # Telegram echoes this back in a header
