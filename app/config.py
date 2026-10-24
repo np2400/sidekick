@@ -42,6 +42,9 @@ DB_PATH = os.getenv("SIDEKICK_DB") or str(DATA_DIR / "sidekick.db")
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
+# Web search (tavily.com, free plan: 1,000 searches a month). Without it, web_search says it isn't set up.
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+
 # Model candidates, best first, as provider:model. Candidates without an API key are skipped.
 # The free tiers have per-model daily limits, so each fallback adds capacity.
 # Order from evals (2026-10-20): gpt-oss-120b passed 21/21 at ~1.3s; Qwen is re-measured next;

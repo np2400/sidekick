@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/np2400/sidekick/actions/workflows/ci.yml/badge.svg)](https://github.com/np2400/sidekick/actions/workflows/ci.yml)
 
-A personal AI assistant you text on Telegram. Ask it about your day, your calendar or your inbox, have it read a web page, or tell it to add something to your list. It **asks for your approval before it creates anything**.
+A personal AI assistant you text on Telegram. Ask it about your day, your calendar or your inbox, have it search the web or read a page, or tell it to add something to your list. It **asks for your approval before it creates anything**.
 
 No sign-up: your Telegram account is your identity. Tasks and reminders are built in, so you don't need any other app. Calendar, Gmail and Todoist are optional connections you turn on if you use them.
 
@@ -16,7 +16,7 @@ Built from scratch in Python (FastAPI), with no agent framework: a hand-written 
 - **Reminders on Telegram:** "Remind me to call Dad tomorrow at 10", "every weekday at 9am". They arrive with Done, Snooze 1 hour and Tomorrow buttons, and survive restarts.
 - **Built-in task list** stored in Sidekick's own database (or Todoist, if you prefer).
 - **Approval before outside writes:** the model can only *propose* a task or calendar event; code holds it until you tap ✅. Your own reminders are created immediately with an Undo button.
-- **Optional integrations:** Google Calendar and Gmail read-only (OAuth 2.0 with PKCE), Todoist (API token, `TASK_BACKEND=todoist`), web pages through the Fetch MCP server.
+- **Optional integrations:** Google Calendar and Gmail read-only (OAuth 2.0 with PKCE), Todoist (API token, `TASK_BACKEND=todoist`), web search (Tavily), web pages through the Fetch MCP server.
 - **MCP both ways:** Sidekick uses an external MCP server, and exposes its own read-only tools to MCP clients.
 
 ## How it works
