@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from app import db, memory, reminders
+from app import daily, db, memory, reminders
 from app.agent import PENDING, decide, handle_approval, run_agent
 from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
 from app.config import OWNER_TIMEZONE, SCHEDULER_ENABLED, TELEGRAM_OWNER_ID, TELEGRAM_WEBHOOK_SECRET
@@ -26,7 +26,7 @@ db.init()  # create or upgrade the SQLite schema before handling any request
 @asynccontextmanager
 async def lifespan(_app):
     """Start the reminder scheduler with the server, stop it on shutdown."""
-    scheduler = reminders.Scheduler(send_message) if SCHEDULER_ENABLED else None
+    scheduler = reminders.Scheduler(send_message, jobs=[daily.tick]) if SCHEDULER_ENABLED else None
     _app.state.scheduler = scheduler  # /health checks it
     if scheduler:
         scheduler.start()
@@ -115,6 +115,7 @@ def telegram_webhook(
     elif command in BRIEF_TRIGGERS or command in TOMORROW_TRIGGERS:
         # Fixed command: Python gathers facts, the model only writes the summary.
         reply = build_brief(days_ahead=1 if command in TOMORROW_TRIGGERS else 0, ctx=ctx)
+        memory.remember(chat_id, text, reply, sensitive=True)  # follow-ups like "move my 3pm" get context
     elif command == "/history":
         reply = history_text(chat_id)
     elif command == "/reminders":

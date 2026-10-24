@@ -103,6 +103,13 @@ def forget_messages(chat_id: int) -> int:
         return conn.execute("DELETE FROM messages WHERE chat_id=?", (chat_id,)).rowcount
 
 
+def claim_daily(job: str, run_date: str, chat_id: int) -> bool:
+    """True for exactly one caller per (job, date, chat): the INSERT either creates the row or does nothing."""
+    with db.connect() as conn:
+        return conn.execute("INSERT OR IGNORE INTO daily_runs (job, run_date, chat_id) VALUES (?,?,?)",
+                            (job, run_date, chat_id)).rowcount == 1
+
+
 def recent_actions(chat_id: int, limit: int = 10) -> list[dict]:
     with db.connect() as conn:
         rows = conn.execute("SELECT at, kind, tool, detail FROM action_log WHERE chat_id=? ORDER BY id DESC LIMIT ?",

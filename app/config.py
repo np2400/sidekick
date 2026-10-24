@@ -35,6 +35,9 @@ SCHEDULER_ENABLED = os.getenv("SIDEKICK_SCHEDULER", "1") != "0"
 
 OWNER_TIMEZONE = os.getenv("OWNER_TIMEZONE") or "America/Los_Angeles"
 
+# Morning brief sent automatically at this local time (HH:MM). Set DAILY_BRIEF_TIME= (empty) to turn it off.
+DAILY_BRIEF_TIME = os.getenv("DAILY_BRIEF_TIME", "08:00")
+
 # Everything that must survive restarts and redeploys lives in one folder: the database and the Google
 # token files. Locally that's the project folder; in Docker it's /data, a volume outside the container.
 DATA_DIR = Path(os.getenv("SIDEKICK_DATA_DIR") or ENV_FILE.parent)

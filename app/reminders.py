@@ -263,8 +263,9 @@ def _schedule_next(row, now: datetime) -> None:
 class Scheduler:
     """Background thread that calls tick() every few seconds. One per process, by design."""
 
-    def __init__(self, send, interval: float = REMINDER_POLL_SECONDS):
+    def __init__(self, send, interval: float = REMINDER_POLL_SECONDS, jobs=()):
         self.send, self.interval = send, interval
+        self.jobs = jobs  # extra checks run after each reminder pass, e.g. the daily brief
         self.last_tick = time.monotonic()  # when a tick last finished; /health watches this
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="reminder-scheduler", daemon=True)
@@ -288,5 +289,10 @@ class Scheduler:
                 self.last_tick = time.monotonic()
             except Exception:
                 log.exception("Reminder tick failed")
+            for job in self.jobs:  # each isolated: a failing job can't stop reminders
+                try:
+                    job(self.send)
+                except Exception:
+                    log.exception("Scheduled job failed")
             if self._stop.wait(self.interval):
                 return
