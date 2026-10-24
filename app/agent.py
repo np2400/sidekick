@@ -38,6 +38,8 @@ SYSTEM_PROMPT = (
     "Never describe the user's calendar, tasks, reminders or email without calling the matching tool first. "
     "If the user sends a photo (a flyer, schedule, ticket or screenshot), read it carefully, including dates, "
     "times and places; use the reminder and calendar tools as usual when they ask. "
+    "Earlier messages of this chat may come first for context; answer the latest one. You can't see photos from "
+    "earlier messages, only what you said about them. "
     "For anything current or that may have changed (news, weather, prices, opening hours), call web_search "
     "and mention the source site. One search is usually enough: answer from the snippets, and use web_fetch "
     "only if they don't answer the question. "
@@ -360,17 +362,20 @@ def tool_specs(tools: dict) -> list[ToolSpec]:
 
 
 def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None = None,
-              images: list[Image] | None = None) -> AgentResult:
+              images: list[Image] | None = None, history: list[Message] | None = None,
+              history_sensitive: bool = False) -> AgentResult:
     """The agent loop. `llm` (default: the model router) and `tools` are injectable so tests can
-    swap in fakes without changing this function. `images`: photos the user attached."""
+    swap in fakes without changing this function. `images`: photos the user attached.
+    `history`: recent messages of this chat (short-term memory), oldest first."""
     tools = TOOLS if tools is None else tools
     llm = llm or default_router().complete
     trace = Trace()
     undo_id = None
-    messages = [Message(role="user", text=user_text, images=images or [])]
+    messages = [*(history or []), Message(role="user", text=user_text, images=images or [])]
     specs = tool_specs(tools)
-    # True once private content is in the conversation: email, or a photo (it may show personal details).
-    sensitive = bool(images)
+    # True once private content is in the conversation: email, a photo (it may show personal details),
+    # or remembered messages that came from either.
+    sensitive = bool(images) or history_sensitive
     used: dict[str, int] = {}  # tool calls so far in this message, checked against TOOL_BUDGET
 
     for step in range(1, MAX_STEPS + 1):
@@ -390,7 +395,8 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
 
         # No tool requested: the model has its final answer.
         if not reply.tool_calls:
-            return AgentResult(reply.text or "(no reply)", trace.finish(), undo_reminder_id=undo_id)
+            return AgentResult(reply.text or "(no reply)", trace.finish(), undo_reminder_id=undo_id,
+                               sensitive=sensitive)
 
         # Model asked for tools: run each, then send the results back on the next loop.
         for call in reply.tool_calls:
@@ -412,4 +418,4 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
             sensitive = sensitive or call.name in SENSITIVE_TOOLS
             messages.append(Message(role="tool", tool_call_id=call.id, tool_name=call.name, result=result))
 
-    return AgentResult("Sorry, I got stuck in a loop.", trace.finish("step_limit"))
+    return AgentResult("Sorry, I got stuck in a loop.", trace.finish("step_limit"), sensitive=sensitive)

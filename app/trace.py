@@ -86,3 +86,4 @@ class AgentResult:
     reply: str
     trace: Trace
     undo_reminder_id: int | None = None  # a reminder created this turn gets an Undo button
+    sensitive: bool = False  # private content (email, a photo) was involved; remembered with the reply

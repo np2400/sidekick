@@ -23,7 +23,7 @@ def test_every_agent_reply_saves_its_trace(monkeypatch):
     monkeypatch.setattr(main, "TELEGRAM_OWNER_ID", "111")
     monkeypatch.setattr(main, "send_message", lambda chat_id, reply, buttons=None: None)
     trace = Trace()
-    monkeypatch.setattr(main, "run_agent", lambda text_, ctx, images=None: AgentResult("hi", trace.finish()))
+    monkeypatch.setattr(main, "run_agent", lambda text_, ctx, images=None, **_: AgentResult("hi", trace.finish()))
     client = TestClient(main.app, headers={"X-Telegram-Bot-Api-Secret-Token": "s"})
 
     client.post("/telegram/webhook", json={"update_id": 5, "message": {

@@ -81,6 +81,28 @@ def recent_traces(limit: int = 10) -> list[dict]:
     return [{"at": r["created_at"], **json.loads(r["data"])} for r in rows]
 
 
+def save_messages(chat_id: int, turns: list[tuple[str, str]], sensitive: bool, keep_days: int) -> None:
+    """Append (role, text) turns to the chat's memory and delete anything older than keep_days."""
+    with db.connect() as conn:
+        conn.executemany("INSERT INTO messages (chat_id, role, text, sensitive) VALUES (?,?,?,?)",
+                         [(chat_id, role, text, int(sensitive)) for role, text in turns])
+        conn.execute("DELETE FROM messages WHERE created_at < datetime('now', ?)", (f"-{keep_days} days",))
+
+
+def recent_messages(chat_id: int, limit: int, within_minutes: int) -> list[dict]:
+    """The chat's last `limit` messages from the past `within_minutes`, oldest first."""
+    with db.connect() as conn:
+        rows = conn.execute("SELECT role, text, sensitive FROM messages WHERE chat_id=? "
+                            "AND created_at >= datetime('now', ?) ORDER BY id DESC LIMIT ?",
+                            (chat_id, f"-{within_minutes} minutes", limit)).fetchall()
+    return [dict(r) for r in reversed(rows)]
+
+
+def forget_messages(chat_id: int) -> int:
+    with db.connect() as conn:
+        return conn.execute("DELETE FROM messages WHERE chat_id=?", (chat_id,)).rowcount
+
+
 def recent_actions(chat_id: int, limit: int = 10) -> list[dict]:
     with db.connect() as conn:
         rows = conn.execute("SELECT at, kind, tool, detail FROM action_log WHERE chat_id=? ORDER BY id DESC LIMIT ?",

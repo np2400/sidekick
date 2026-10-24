@@ -93,7 +93,7 @@ def test_webhook_sends_a_captioned_photo_to_the_agent(monkeypatch):
     monkeypatch.setattr(main, "download_photo", lambda sizes: PHOTO)
     sent, seen = [], []
     monkeypatch.setattr(main, "send_message", lambda chat_id, reply, buttons=None: sent.append(reply))
-    monkeypatch.setattr(main, "run_agent", lambda text_, ctx, images=None: seen.append((text_, images)) or
+    monkeypatch.setattr(main, "run_agent", lambda text_, ctx, images=None, **_: seen.append((text_, images)) or
                         AgentResult("Concert, Nov 2 at 8pm.", Trace()))
     client = TestClient(main.app, headers={"X-Telegram-Bot-Api-Secret-Token": "s"})
 

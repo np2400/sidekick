@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from app import db, reminders
+from app import db, memory, reminders
 from app.agent import PENDING, decide, handle_approval, run_agent
 from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
 from app.config import OWNER_TIMEZONE, SCHEDULER_ENABLED, TELEGRAM_OWNER_ID, TELEGRAM_WEBHOOK_SECRET
@@ -110,7 +110,8 @@ def telegram_webhook(
         if image is None:
             reply = "Sorry, I couldn't download that photo. Try sending it again."
         else:
-            reply, buttons = agent_reply(ctx, text or PHOTO_PROMPT, images=[image])
+            reply, buttons = agent_reply(ctx, text or PHOTO_PROMPT, images=[image],
+                                         remember_as=f"[sent a photo] {text}".strip())
     elif command in BRIEF_TRIGGERS or command in TOMORROW_TRIGGERS:
         # Fixed command: Python gathers facts, the model only writes the summary.
         reply = build_brief(days_ahead=1 if command in TOMORROW_TRIGGERS else 0, ctx=ctx)
@@ -118,9 +119,14 @@ def telegram_webhook(
         reply = history_text(chat_id)
     elif command == "/reminders":
         reply = reminders_text(ctx)
+    elif command == "/forget":
+        n = memory.forget(chat_id)
+        reply = f"Done: I forgot our recent conversation ({n} messages)."
     else:
         reply = handle_approval(ctx, text)
-        if reply is None:
+        if reply is not None:
+            memory.remember(chat_id, text, reply)  # so a later message knows it was approved or declined
+        else:
             reply, buttons = agent_reply(ctx, text)
     send_message(chat_id, reply, buttons=buttons)
     return {"ok": True}
@@ -131,12 +137,16 @@ PHOTO_PROMPT = ("What's in this photo? If it shows dates, times or events, list 
                 "reminders or calendar events.")
 
 
-def agent_reply(ctx: ToolContext, text: str, images: list | None = None) -> tuple[str, list | None]:
-    """Run the agent; returns the reply and the buttons to show under it."""
-    result = run_agent(text, ctx, images=images)
+def agent_reply(ctx: ToolContext, text: str, images: list | None = None,
+                remember_as: str | None = None) -> tuple[str, list | None]:
+    """Run the agent with the chat's recent messages; returns the reply and the buttons to show under it."""
+    past, past_sensitive = memory.history(ctx.chat_id)
+    result = run_agent(text, ctx, images=images, history=past, history_sensitive=past_sensitive)
     trace_json = result.trace.to_log()
     log.info("trace %s", trace_json)
     save_trace(ctx.chat_id, result.trace.trace_id, result.trace.outcome, trace_json)  # survives redeploys
+    if result.trace.outcome not in ("llm_unavailable", "privacy_blocked"):  # failures aren't worth remembering
+        memory.remember(ctx.chat_id, remember_as or text, result.reply, result.sensitive)
     if result.trace.outcome == "approval_staged" and (pending := PENDING.peek(ctx.chat_id)):
         return result.reply, approval_buttons(pending["id"])  # ✅ / ❌ under the proposal
     if result.undo_reminder_id:
@@ -171,6 +181,7 @@ def handle_button(query: dict) -> None:
         answer_button(query["id"], "Unknown button")
         return
     reply = BUTTONS[choice](chat_id, int(item_id))
+    memory.remember(chat_id, f"[tapped {choice}]", reply)  # e.g. a later "move it to 4pm" knows what was approved
     answer_button(query["id"])                          # stop the spinner on the button
     remove_buttons(chat_id, message.get("message_id"))  # each button works once
     send_message(chat_id, reply)
