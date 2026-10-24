@@ -126,10 +126,9 @@ def telegram_webhook(
     return {"ok": True}
 
 
-# Used when a photo arrives without a caption. "Briefly" cuts invented detail; dates are only worth a
-# reminder if they're still ahead (a 2017 date on a book cover isn't).
-PHOTO_PROMPT = ("Briefly say what's in this photo. Only if it shows an upcoming date, time or event, "
-                "offer to add a reminder or calendar event.")
+# Used when a photo arrives without a caption. "Briefly" cuts invented detail. No offer to set reminders:
+# without memory between messages, the user's "yes" would arrive without the photo. Actions go in the caption.
+PHOTO_PROMPT = "Briefly say what's in this photo."
 
 
 def agent_reply(ctx: ToolContext, text: str, images: list | None = None) -> tuple[str, list | None]:
