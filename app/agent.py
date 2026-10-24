@@ -21,7 +21,8 @@ log = logging.getLogger("sidekick.agent")
 MAX_STEPS = 5  # stop runaway loops if the model keeps calling tools
 # Per-message limits for tools that return lots of text. Every later model call resends those results,
 # which burns the free tokens-per-minute budget (Qwen on Groq: 7,000) and triggers slow fallbacks.
-TOOL_BUDGET = {"web_search": 2, "web_fetch": 2}
+# One fetch: pages are the biggest results and often fail (many sites block bots); snippets usually suffice.
+TOOL_BUDGET = {"web_search": 2, "web_fetch": 1}
 
 SYSTEM_PROMPT = (
     "You are Sidekick, a concise personal assistant chatting over Telegram. "

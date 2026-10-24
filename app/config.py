@@ -49,9 +49,11 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 # The free tiers have per-model daily limits, so each fallback adds capacity.
 # Order from evals (2026-10-20): gpt-oss-120b passed 21/21 at ~1.3s; Qwen is re-measured next;
 # Gemini comes after Groq because it was often overloaded live and isn't evaluated yet (free-tier quota).
+# 3.5-flash before 3.8-flash (2026-10-24): in production traces 3.8 was overloaded or timed out (25 s each)
+# every time it was reached, while 3.5 answered every time.
 # `or` also covers a blank LLM_CANDIDATES= line in .env.
 LLM_CANDIDATES = os.getenv("LLM_CANDIDATES") or (
-    "groq:openai/gpt-oss-120b,groq:qwen/qwen3.8-27b,gemini:gemini-3.8-flash,gemini:gemini-3.5-flash,"
+    "groq:openai/gpt-oss-120b,groq:qwen/qwen3.8-27b,gemini:gemini-3.5-flash,gemini:gemini-3.8-flash,"
     "gemini:gemini-3.5-flash-lite,gemini:gemini-3.1-flash-lite"
 )
 # Providers that must NOT see sensitive content (email bodies/previews), e.g. "groq". Empty = all allowed.
