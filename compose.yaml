@@ -32,6 +32,7 @@ services:
       - "443:443"                  # HTTPS: what Telegram connects to
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./site:/srv:ro             # home page + privacy policy
       - caddy_data:/data           # certificates: keep them, or Let's Encrypt rate-limits re-issuing
     restart: unless-stopped
 
