@@ -8,7 +8,7 @@ No sign-up: your Telegram account is your identity. Tasks and reminders are buil
 
 Built from scratch in Python (FastAPI), with no agent framework: a hand-written tool-calling loop, a provider-neutral model router, an offline test suite and a live evaluation harness.
 
-> Status: working personal prototype (single user, runs locally behind a tunnel). Next: deployment so it runs 24/7, then a small invite-only beta.
+> Status: personal assistant in daily use, running 24/7 on AWS (single user). Next: a public demo, then a small invite-only beta.
 
 ## What it does
 
@@ -58,6 +58,39 @@ python -m app.set_webhook https://<your-tunnel>.trycloudflare.com
 python -m app.google_auth   # one-time Google sign-in for Calendar/Gmail
 ```
 
+A bot delivers to one webhook at a time, so a laptop and a server can't share one bot. Use a separate test bot locally (and `SIDEKICK_SCHEDULER=0` if the laptop has a copy of the production database); `set_webhook` asks before replacing a different URL.
+
+## Running in production
+
+Sidekick runs 24/7 on one small AWS server (EC2 t4g.micro, ARM, Ubuntu) with Docker Compose.
+
+```mermaid
+flowchart LR
+    T[Telegram] -->|HTTPS webhook| C[Caddy: TLS + path allowlist]
+    C --> S[Sidekick: FastAPI + reminder scheduler]
+    S --- D[(SQLite on a volume)]
+    D -->|Litestream, every 10 s| B[(S3 bucket)]
+    U[UptimeRobot] -->|/health every 5 min| C
+```
+
+- **HTTPS:** Caddy obtains and renews a Let's Encrypt certificate. It forwards only `/telegram/webhook` and `/health`, plus a static home page and [privacy policy](site/privacy.html); every other path is 404.
+- **One app process on purpose:** the reminder scheduler must run exactly once.
+- **Backups:** Litestream streams every database change to S3 within about 10 seconds, with daily snapshots kept for a week. Restores are drilled by comparing the integrity check and row counts against production.
+- **No AWS keys on the server:** S3 access comes from an EC2 instance role scoped to one bucket. IMDSv2 is required with a hop limit of 1, so the app container, which can fetch web pages, can't read the role's credentials.
+- **Health means "can deliver reminders":** `/health` returns 503 if the scheduler hasn't finished a pass in 60 seconds, so the uptime monitor catches a stuck scheduler, not just a dead web server.
+- **Hardening:** non-root container, secrets only in a `chmod 600` `.env` on the server, SSH keys only, firewall open on 22/80/443, container logs capped at 30 MB.
+
+Set up a server: install Docker, clone the repo (read-only deploy key), point a domain at the server, create `.env` with the secrets plus the server-only settings at the end of `.env.example`, then:
+
+```bash
+docker compose up -d --build
+docker compose exec sidekick python -m app.set_webhook https://<your-domain>
+```
+
+Ship an update: `git pull && docker compose up -d --build`. Restore a backup into a test file: `docker compose run --rm litestream restore -o /data/restore-test.db /data/sidekick.db`.
+
+On a laptop, `docker compose up -d` starts only Sidekick; Caddy and Litestream run when `COMPOSE_PROFILES=public`.
+
 ## How it's tested
 
 Three layers, from fast and free to slow and real:
@@ -65,7 +98,7 @@ Three layers, from fast and free to slow and real:
 | Layer | Runs | What it checks |
 |---|---|---|
 | **Offline tests** (`pytest`) | On every push, in CI | The rules that must never break: no write without approval, no private content in logs, a crashing tool can't crash the agent, duplicate deliveries are ignored, router retry/fallback/privacy logic. Fake world, scripted model, network blocked. |
-| **Live evals** (`python -m evals.run`) | Manually (needs API keys) | Real models on 21 synthetic requests, scored on task success, safety and efficiency. Writes a comparison report to `evals/reports/`. |
+| **Live evals** (`python -m evals.run`) | Manually (needs API keys) | Real models on 25 synthetic requests, scored on task success, safety and efficiency. Writes a comparison report to `evals/reports/`. |
 | **Regression gate** (`python -m evals.compare`) | After each eval run | Fails if any safety case fails, or a model's pass rate drops more than 5 points against the saved baseline. |
 
 ```bash
@@ -79,4 +112,4 @@ CI also runs a lint for real bugs (`ruff`) and a secret scan of the full git his
 
 ## Security
 
-Secrets live in `.env` and Google token files, which are git-ignored. Logs record metadata only. Gmail access is read-only by scope, and content from emails and web pages is treated as untrusted input.
+Secrets live in `.env` and Google token files, which are git-ignored and never copied into the Docker image. Logs record metadata only. Gmail access is read-only by scope, and content from emails and web pages is treated as untrusted input. See the [privacy policy](site/privacy.html) for what Sidekick accesses and stores.
