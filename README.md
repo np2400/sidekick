@@ -8,7 +8,7 @@ No sign-up: your Telegram account is your identity. Tasks and reminders are buil
 
 Built from scratch in Python (FastAPI), with no agent framework: a hand-written tool-calling loop, a provider-neutral model router, an offline test suite and a live evaluation harness.
 
-> Status: personal assistant in daily use, running 24/7 on AWS (single user). Next: a public demo, then a small invite-only beta.
+> Status: personal assistant in daily use, running 24/7 on AWS; invite-only for a few users. Next: per-user settings, then a public demo.
 
 ## What it does
 
@@ -18,6 +18,7 @@ Built from scratch in Python (FastAPI), with no agent framework: a hand-written 
 - **Morning brief:** every day at 8:00 (configurable) Sidekick sends today's calendar, tasks, reminders and unread mail, at most once a day even across restarts.
 - **Reminders on Telegram:** "Remind me to call Dad tomorrow at 10", "every weekday at 9am". They arrive with Done, Snooze 1 hour and Tomorrow buttons, and survive restarts.
 - **Built-in task list** stored in Sidekick's own database (or Todoist, if you prefer).
+- **Invite-only, multi-user:** the owner sends `/invite` and gets a one-time link (24 h, stored only as a SHA-256 fingerprint). Each user's reminders, tasks, memory and approvals are isolated by chat, and invited users get a tool set without the owner's Google and Todoist accounts: the tools simply don't exist for them, so a manipulated model can't call them. Isolation tests try to cross every boundary.
 - **Approval before outside writes:** the model can only *propose* a task or calendar event; code holds it until you tap ✅. Your own reminders are created immediately with an Undo button.
 - **Optional integrations:** Google Calendar and Gmail read-only (OAuth 2.0 with PKCE), Todoist (API token, `TASK_BACKEND=todoist`), web search (Tavily), web pages through the Fetch MCP server.
 - **MCP both ways:** Sidekick uses an external MCP server, and exposes its own read-only tools to MCP clients.

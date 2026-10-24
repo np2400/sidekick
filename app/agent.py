@@ -77,6 +77,24 @@ TOOLS = {
 }
 if TASK_BACKEND == "native":
     TOOLS["complete_task"] = native_tasks.complete_task
+
+# Members (invited friends) never get the owner's accounts: Google Calendar and Gmail are the owner's, and
+# their tasks always live in Sidekick's own list (not the owner's Todoist). Leaving tools out is the guard:
+# a model can be talked into calling a tool, but not one that doesn't exist for this user.
+OWNER_ONLY_TOOLS = {"list_events", "create_event", "search_emails", "read_email"}
+MEMBER_TOOLS = {name: tool for name, tool in TOOLS.items() if name not in OWNER_ONLY_TOOLS} | {
+    "list_tasks": native_tasks.list_tasks, "create_task": native_tasks.create_task,
+    "complete_task": native_tasks.complete_task,
+}
+
+
+def tools_for(role: str) -> dict:
+    return TOOLS if role == "owner" else MEMBER_TOOLS
+
+
+def _real(tools: dict) -> bool:
+    """The production registries (not a test's fake world): only these may borrow MCP tools like web_fetch."""
+    return tools is TOOLS or tools is MEMBER_TOOLS
 # Tools that change real data need the owner's "yes" first. Value = optional check run before asking.
 WRITE_TOOLS = {"create_task": None, "create_event": validate_event}
 # Low-risk changes to the user's OWN Sidekick data: run immediately (undoable), logged as executed.
@@ -238,7 +256,7 @@ def run_tool(name: str, args: dict, ctx: ToolContext, tools: dict) -> dict:
     `tools` is the registry to use: the real TOOLS in production, a fake one in tests.
     """
     tool = tools.get(name)
-    if tool is None and tools is TOOLS and name in discover_mcp_tools()[0]:
+    if tool is None and _real(tools) and name in discover_mcp_tools()[0]:
         # Borrowed MCP tools exist only in the real world; the server validates its own schema.
         if name == "web_fetch":
             args.setdefault("max_length", 4000)  # keep pages small: model requests stay cheap and fast
@@ -318,7 +336,7 @@ def decide(ctx: ToolContext, approve: bool, action_id: int | None = None, tools:
     `action_id` comes from a button: it must match the CURRENT proposal, so an old button can't approve
     a newer action. Two taps (or a retried request) race for claim(); only one wins.
     """
-    tools = TOOLS if tools is None else tools
+    tools = tools_for(ctx.role) if tools is None else tools  # a member's approval runs a member's tool
     pending = PENDING.claim(ctx.chat_id, action_id)
     if pending is None:
         return "That request was already handled or replaced."
@@ -345,17 +363,19 @@ def decide(ctx: ToolContext, approve: bool, action_id: int | None = None, tools:
 SENSITIVE_TOOLS = {"search_emails", "read_email"}  # their results are private content -> privacy routing
 
 
-def system_prompt() -> str:
+def system_prompt(tools: dict | None = None) -> str:
     # Put "now" in the prompt so the model doesn't spend a whole request calling get_current_time.
     now = datetime.now(ZoneInfo(OWNER_TIMEZONE))
     tomorrow = (now + timedelta(days=1)).strftime("%A %Y-%m-%d")
+    no_google = ("\nThis user has not connected Google Calendar or Gmail: if asked about them, say so instead of "
+                 "guessing." if tools is not None and "list_events" not in tools else "")
     return (f"{SYSTEM_PROMPT}\nCurrent time: {now.strftime('%A %Y-%m-%d %H:%M')} ({OWNER_TIMEZONE}). "
-            f"Tomorrow is {tomorrow}.")
+            f"Tomorrow is {tomorrow}.{no_google}")
 
 
 def tool_specs(tools: dict) -> list[ToolSpec]:
     """What the model is told about each tool. Borrowed MCP tools join only in the real world."""
-    borrowed = discover_mcp_tools()[1] if tools is TOOLS else []
+    borrowed = discover_mcp_tools()[1] if _real(tools) else []
     declarations = [d for d in TOOL_DECLARATIONS if d["name"] in tools] + borrowed
     return [ToolSpec(d["name"], d["description"], d.get("parameters") or d.get("parametersJsonSchema"))
             for d in declarations]
@@ -367,7 +387,7 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
     """The agent loop. `llm` (default: the model router) and `tools` are injectable so tests can
     swap in fakes without changing this function. `images`: photos the user attached.
     `history`: recent messages of this chat (short-term memory), oldest first."""
-    tools = TOOLS if tools is None else tools
+    tools = tools_for(ctx.role) if tools is None else tools
     llm = llm or default_router().complete
     trace = Trace()
     undo_id = None
@@ -380,7 +400,7 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
 
     for step in range(1, MAX_STEPS + 1):
         try:
-            response = llm(messages, specs, system_prompt(), sensitive=sensitive)
+            response = llm(messages, specs, system_prompt(tools), sensitive=sensitive)
         except AllProvidersFailed as exc:
             trace.record_failures(exc.attempts)
             if exc.privacy_blocked:

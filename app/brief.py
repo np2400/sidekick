@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app import reminders
-from app.agent import TOOLS, system_prompt
+from app.agent import system_prompt, tools_for
 from app.config import OWNER_TIMEZONE
 from app.gcal import list_events
 from app.gmail import search_emails
@@ -37,18 +37,20 @@ def gather(days_ahead: int = 0, ctx=None) -> dict:
     """Facts only, from real APIs. Each source fails on its own without breaking the brief."""
     when = datetime.now(ZoneInfo(OWNER_TIMEZONE)) + timedelta(days=days_ahead)
     day = when.strftime("%Y-%m-%d")
-    return {
+    facts = {
         "date": when.strftime("%A %b %d"),
-        "events": list_events(f"{day}T00:00:00", f"{day}T23:59:59"),
         # Whichever task backend is configured (Todoist or built-in); built-in tasks need to know whose list.
         "tasks": _tasks("today | overdue" if days_ahead == 0 else "tomorrow | overdue", ctx),
         "reminders": reminders.reminders_between(ctx.chat_id, *_day_bounds(when)) if ctx else [],
-        "unread_email_last_24h": search_emails("is:unread newer_than:1d -in:spam", max_results=15),
     }
+    if ctx is None or ctx.role == "owner":  # Calendar and Gmail are the owner's accounts
+        facts["events"] = list_events(f"{day}T00:00:00", f"{day}T23:59:59")
+        facts["unread_email_last_24h"] = search_emails("is:unread newer_than:1d -in:spam", max_results=15)
+    return facts
 
 
 def _tasks(query: str, ctx) -> dict:
-    tool = TOOLS["list_tasks"]
+    tool = tools_for(ctx.role if ctx else "owner")["list_tasks"]  # members: their own built-in list
     if "ctx" not in inspect.signature(tool).parameters:
         return tool(query)  # Todoist: one account, no need to know whose
     return tool(query, ctx=ctx) if ctx else {"error": "no chat context for the built-in task list"}
@@ -62,13 +64,14 @@ def _day_bounds(when: datetime) -> tuple[datetime, datetime]:
 def plain_brief(facts: dict) -> str:
     """Fallback when every model is unavailable: no AI, just the facts."""
     lines = [f"☀️ {facts['date']} (plain version, AI unavailable)"]
-    for e in facts["events"].get("events", []):
+    for e in facts.get("events", {}).get("events", []):
         lines.append(f"• {e['start'][11:16] or 'all day'} {e['summary']}")
     for r in facts.get("reminders", []):
         lines.append(f"• Reminder {r['at'].split(', ')[-1]}: {r['text']}")
     for t in facts["tasks"].get("tasks", []):
         lines.append(f"• Task: {t['content']}" + (f" ({t['due']})" if t.get("due") else ""))
-    lines.append(f"• {facts['unread_email_last_24h'].get('count', 0)} unread emails in the last day")
+    if "unread_email_last_24h" in facts:  # owner only
+        lines.append(f"• {facts['unread_email_last_24h'].get('count', 0)} unread emails in the last day")
     return "\n".join(lines)
 
 

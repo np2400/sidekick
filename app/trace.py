@@ -13,9 +13,10 @@ from app.logging_setup import request_id
 
 @dataclass
 class ToolContext:
-    """Who a request is for. Today always the owner; later one row per user."""
+    """Who a request is for. Set by the server from the Telegram sender, never by the model."""
     chat_id: int
     user_id: str = "owner"
+    role: str = "owner"  # owner | member: decides which tools exist for this request
 
 
 @dataclass

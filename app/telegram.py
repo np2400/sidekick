@@ -40,6 +40,18 @@ def send_message(chat_id: int, text: str, buttons: list[tuple[str, str]] | None 
     return result
 
 
+_username = ""
+
+
+def bot_username() -> str:
+    """For invite links (t.me/<bot>?start=CODE). Asked once, then remembered; '' if Telegram can't be reached."""
+    global _username
+    if not _username:
+        me = call("getMe", {})
+        _username = me.get("result", {}).get("username", "") if me.get("ok") else ""
+    return _username
+
+
 def download_photo(sizes: list[dict]) -> Image | None:
     """Telegram sends one photo in several sizes; fetch the largest that fits PHOTO_MAX_SIDE."""
     def area(s: dict) -> int:

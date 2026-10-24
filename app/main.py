@@ -8,13 +8,14 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from app import daily, db, memory, reminders
+from app import daily, db, memory, reminders, users
 from app.agent import PENDING, decide, handle_approval, run_agent
 from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
 from app.config import OWNER_TIMEZONE, SCHEDULER_ENABLED, TELEGRAM_OWNER_ID, TELEGRAM_WEBHOOK_SECRET
 from app.db.store import first_time_seen, recent_actions, save_trace
 from app.logging_setup import RequestIdMiddleware, setup_logging
-from app.telegram import answer_button, approval_buttons, download_photo, remove_buttons, send_message
+from app.telegram import (answer_button, approval_buttons, bot_username, download_photo, remove_buttons,
+                          send_message)
 from app.trace import ToolContext
 
 setup_logging()  # timestamp + request id on every line; LOG_LEVEL=DEBUG shows content (laptop only)
@@ -95,15 +96,23 @@ def telegram_webhook(
     if not (text or photos) or chat_id is None:
         return {"ok": True}
 
-    # 4. Authorize: only the owner may talk to Sidekick.
-    if sender_id != TELEGRAM_OWNER_ID:
-        log.warning("Ignoring non-owner %s. If this is you, set TELEGRAM_OWNER_ID=%s in .env", sender_id, sender_id)
+    # Group chats share one chat id between several people, which would mix their data: private chats only.
+    if message.get("chat", {}).get("type", "private") != "private":
         return {"ok": True}
-    ctx = ToolContext(chat_id=chat_id)
 
-    # 5. Approve: if a write is pending, this message is the owner's yes/no.
-    # 6. Think: otherwise the model (via the router) decides whether to answer directly or call a Python tool.
+    # 4. Authorize: the owner, or a member who joined with an invite. Strangers can only redeem an invite.
     command = text.strip().lower()
+    role = role_of(sender_id)
+    if role is None:
+        if command.startswith("/start") and sender_id.isdigit():
+            send_message(chat_id, join(text, int(sender_id), message.get("from", {}).get("first_name", "")))
+        else:
+            log.warning("Ignoring stranger %s. If this is you, set TELEGRAM_OWNER_ID=%s in .env", sender_id, sender_id)
+        return {"ok": True}
+    ctx = context(chat_id, sender_id, role)
+
+    # 5. Approve: if a write is pending, this message is the user's yes/no.
+    # 6. Think: otherwise the model (via the router) decides whether to answer directly or call a Python tool.
     buttons = None
     if photos:
         image = download_photo(photos)
@@ -123,6 +132,10 @@ def telegram_webhook(
     elif command == "/forget":
         n = memory.forget(chat_id)
         reply = f"Done: I forgot our recent conversation ({n} messages)."
+    elif command.startswith("/start"):
+        reply = WELCOME
+    elif command == "/invite":
+        reply = invite_text(int(sender_id)) if role == "owner" else "Only the owner can invite people."
     else:
         reply = handle_approval(ctx, text)
         if reply is not None:
@@ -136,6 +149,41 @@ def telegram_webhook(
 # Used when a photo arrives without a caption.
 PHOTO_PROMPT = ("What's in this photo? If it shows dates, times or events, list them and offer to add "
                 "reminders or calendar events.")
+
+WELCOME = ("I'm Sidekick, an assistant you text. Try: \"remind me to call Mom tomorrow at 10\", \"add a task to "
+           "buy milk\", \"what's the weather this weekend?\", or send a photo with a question in the caption. "
+           "/reminders lists your reminders; /forget clears our recent conversation.")
+
+
+def role_of(sender_id: str) -> str | None:
+    """'owner', 'member', or None for a stranger. The owner comes from config, members from the users table."""
+    if not sender_id.isdigit():
+        return None
+    if sender_id == TELEGRAM_OWNER_ID:
+        return "owner"
+    return "member" if users.is_member(int(sender_id)) else None
+
+
+def context(chat_id: int, sender_id: str, role: str) -> ToolContext:
+    """Who this request is for. Built by the server from Telegram's sender, never from anything the model says."""
+    return ToolContext(chat_id=chat_id, user_id="owner" if role == "owner" else sender_id, role=role)
+
+
+def join(text: str, telegram_id: int, name: str) -> str:
+    """A stranger sent /start CODE (tapping an invite link does this automatically)."""
+    parts = text.split(maxsplit=1)
+    if len(parts) == 2 and users.redeem(parts[1].strip(), telegram_id, name):
+        log.info("New member %s joined", telegram_id)
+        return f"Welcome, {name or 'friend'}! " + WELCOME
+    log.warning("Rejected join attempt from %s", telegram_id)
+    return "Sidekick is invite-only. Ask the person who runs it for an invite link."
+
+
+def invite_text(owner_id: int) -> str:
+    code = users.create_invite(owner_id)
+    username = bot_username()
+    how = f"https://t.me/{username}?start={code}" if username else f"Have them send the bot: /start {code}"
+    return f"Invite (works once, expires in {users.INVITE_HOURS} hours). Send this to your friend:\n{how}"
 
 
 def agent_reply(ctx: ToolContext, text: str, images: list | None = None,
@@ -156,32 +204,33 @@ def agent_reply(ctx: ToolContext, text: str, images: list | None = None,
 
 
 BUTTONS = {
-    "approve": lambda chat_id, n: decide(ToolContext(chat_id=chat_id), approve=True, action_id=n),
-    "reject": lambda chat_id, n: decide(ToolContext(chat_id=chat_id), approve=False, action_id=n),
-    "done": lambda chat_id, n: reminders.mark_done(n, chat_id),
-    "snooze": lambda chat_id, n: reminders.snooze(n, chat_id, timedelta(hours=1)),
-    "tomorrow": lambda chat_id, n: reminders.snooze(n, chat_id, timedelta(days=1)),
-    "undo": lambda chat_id, n: reminders.undo(n, chat_id),
-}  # every action: (chat_id, item_id) -> reply text
+    "approve": lambda ctx, n: decide(ctx, approve=True, action_id=n),
+    "reject": lambda ctx, n: decide(ctx, approve=False, action_id=n),
+    "done": lambda ctx, n: reminders.mark_done(n, ctx.chat_id),
+    "snooze": lambda ctx, n: reminders.snooze(n, ctx.chat_id, timedelta(hours=1)),
+    "tomorrow": lambda ctx, n: reminders.snooze(n, ctx.chat_id, timedelta(days=1)),
+    "undo": lambda ctx, n: reminders.undo(n, ctx.chat_id),
+}  # every action: (who is asking, item_id) -> reply text; each checks the item belongs to that chat
 
 
 def handle_button(query: dict) -> None:
     """A button was tapped: ✅/❌ on a proposal, or Done/Snooze/Tomorrow/Undo on a reminder.
 
-    Same rules as typed messages: owner only, and each action checks the item belongs to this chat.
+    Same rules as typed messages: owner or member only, and each action checks the item belongs to this chat.
     """
     sender_id = str(query.get("from", {}).get("id", ""))
     message = query.get("message") or {}
     chat_id = message.get("chat", {}).get("id")
     log.info("Button press from %s", sender_id)
-    if sender_id != TELEGRAM_OWNER_ID or chat_id is None:
+    role = role_of(sender_id)
+    if role is None or chat_id is None:
         answer_button(query["id"])
         return
     choice, _, item_id = (query.get("data") or "").partition(":")
     if choice not in BUTTONS or not item_id.isdigit():
         answer_button(query["id"], "Unknown button")
         return
-    reply = BUTTONS[choice](chat_id, int(item_id))
+    reply = BUTTONS[choice](context(chat_id, sender_id, role), int(item_id))
     memory.remember(chat_id, f"[tapped {choice}]", reply)  # e.g. a later "move it to 4pm" knows what was approved
     answer_button(query["id"])                          # stop the spinner on the button
     remove_buttons(chat_id, message.get("message_id"))  # each button works once
