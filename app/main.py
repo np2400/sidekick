@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from app import db, reminders
@@ -27,6 +27,7 @@ db.init()  # create or upgrade the SQLite schema before handling any request
 async def lifespan(_app):
     """Start the reminder scheduler with the server, stop it on shutdown."""
     scheduler = reminders.Scheduler(send_message) if SCHEDULER_ENABLED else None
+    _app.state.scheduler = scheduler  # /health checks it
     if scheduler:
         scheduler.start()
     yield
@@ -42,8 +43,13 @@ class EchoRequest(BaseModel):
     text: str = Field(min_length=1, max_length=500)
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
+@app.api_route("/health", methods=["GET", "HEAD"])  # uptime monitors often send HEAD
+def health(response: Response) -> dict[str, str]:
+    # Healthy means "can still deliver reminders", not just "the web server answers".
+    scheduler = getattr(app.state, "scheduler", None)
+    if scheduler and not scheduler.healthy():
+        response.status_code = 503
+        return {"status": "reminder scheduler stalled"}
     return {"status": "ok"}
 
 

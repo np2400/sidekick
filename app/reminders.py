@@ -7,6 +7,7 @@ exactly-once delivery to an outside service like Telegram can't be guaranteed.
 import calendar
 import logging
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -20,6 +21,7 @@ LEASE = timedelta(seconds=60)      # a 'sending' row older than this was interru
 MAX_ATTEMPTS = 3
 LATE_AFTER = timedelta(minutes=2)  # label it "(late)" past this
 MISSED_AFTER = timedelta(hours=24) # don't send a day-old reminder; mark it missed
+STALL_AFTER = 60                   # seconds without a finished tick before /health reports a problem
 DB_FMT = "%Y-%m-%d %H:%M:%S"
 
 
@@ -263,8 +265,13 @@ class Scheduler:
 
     def __init__(self, send, interval: float = REMINDER_POLL_SECONDS):
         self.send, self.interval = send, interval
+        self.last_tick = time.monotonic()  # when a tick last finished; /health watches this
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="reminder-scheduler", daemon=True)
+
+    def healthy(self) -> bool:
+        """False when no tick has finished for a while: the thread died, hung, or every tick fails."""
+        return time.monotonic() - self.last_tick < max(STALL_AFTER, 3 * self.interval)
 
     def start(self) -> None:
         log.info("Reminder scheduler started (every %ss)", self.interval)
@@ -278,6 +285,7 @@ class Scheduler:
         while True:
             try:
                 tick(self.send)  # first pass runs at startup: catches up on anything missed while down
+                self.last_tick = time.monotonic()
             except Exception:
                 log.exception("Reminder tick failed")
             if self._stop.wait(self.interval):

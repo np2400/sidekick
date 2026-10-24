@@ -1,9 +1,18 @@
 # docker compose up -d  : build (if needed) and start Sidekick in the background
 # docker compose logs -f: follow its logs      docker compose down: stop it
+
+# Docker keeps logs forever by default; cap each container at 3 files x 10 MB so they can't fill the disk.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   sidekick:
     build: .
     image: sidekick:local
+    logging: *logging
     env_file: .env                 # secrets come from .env at run time, never from the image
     volumes:
       - ./data:/data               # the "locker": database + Google tokens survive rebuilds
@@ -15,6 +24,7 @@ services:
   caddy:
     image: caddy:2.10-alpine
     profiles: [public]
+    logging: *logging
     environment:
       SIDEKICK_DOMAIN: ${SIDEKICK_DOMAIN:-}
     ports:
@@ -29,6 +39,7 @@ services:
   litestream:
     image: litestream/litestream:0.5.15
     profiles: [public]
+    logging: *logging
     command: replicate
     user: "10001:10001"            # same user as Sidekick, so it can read and checkpoint the database
     # Host network: lets Litestream reach the EC2 instance role (S3 permission, no keys on disk), while
