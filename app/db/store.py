@@ -66,6 +66,21 @@ def log_action(user_id: str, chat_id: int, kind: str, tool: str, detail: str | N
                      (user_id, chat_id, kind, tool, detail, trace_id))
 
 
+def save_trace(chat_id: int, trace_id: str, outcome: str, data: str) -> None:
+    """Keep the trace (metadata-only JSON) for 90 days."""
+    with db.connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO traces (trace_id, chat_id, outcome, data) VALUES (?,?,?,?)",
+                     (trace_id, chat_id, outcome, data))
+        conn.execute("DELETE FROM traces WHERE created_at < datetime('now', '-90 days')")
+
+
+def recent_traces(limit: int = 10) -> list[dict]:
+    with db.connect() as conn:
+        rows = conn.execute("SELECT created_at, data FROM traces ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                            (limit,)).fetchall()
+    return [{"at": r["created_at"], **json.loads(r["data"])} for r in rows]
+
+
 def recent_actions(chat_id: int, limit: int = 10) -> list[dict]:
     with db.connect() as conn:
         rows = conn.execute("SELECT at, kind, tool, detail FROM action_log WHERE chat_id=? ORDER BY id DESC LIMIT ?",

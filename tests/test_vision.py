@@ -48,6 +48,17 @@ def test_photos_only_go_to_models_that_can_see():
     assert groq.models[-1] == "openai/gpt-oss-120b"  # text-only messages still start with GPT-OSS
 
 
+def test_photos_can_have_their_own_model_order():
+    text_order = parse_candidates("groq:openai/gpt-oss-120b,groq:qwen/qwen3.8-27b,gemini:gemini-3.5-flash", set())
+    photo_order = parse_candidates("gemini:gemini-3.5-flash,groq:qwen/qwen3.8-27b", set())
+    groq, gemini = Recorder("groq"), Recorder("gemini")
+    router = Router(text_order, {"groq": groq, "gemini": gemini}, vision_candidates=photo_order)
+
+    assert router.complete([Message("user", text="what's this?", images=[PHOTO])], [], "sys").provider == "gemini"
+    assert router.complete([Message("user", text="hi")], [], "sys").model == "openai/gpt-oss-120b"
+    assert groq.models == ["openai/gpt-oss-120b"]  # the photo never went to Groq
+
+
 def test_text_only_candidates_cannot_answer_a_photo():
     router = Router([Candidate("groq", "openai/gpt-oss-120b")], {"groq": Recorder("groq")})
     result = run_agent("what's this?", ToolContext(chat_id=1), llm=router.complete, tools={}, images=[PHOTO])

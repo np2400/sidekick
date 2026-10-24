@@ -26,21 +26,23 @@ accounts on its allowlist can use it; there is no public sign-up.</p>
     It cannot send, change or delete email.</li>
   <li><strong>Web search</strong>: when a question needs current information, the search query is sent to
     Tavily, a search service, which returns public web results.</li>
-  <li><strong>Photos</strong> you send the bot: passed to an AI model that can read images (currently Qwen on
-    Groq, or Google Gemini) to answer you. Sidekick does not store photos.</li>
+  <li><strong>Photos</strong> you send the bot: passed to an AI model that can read images (currently Google
+    Gemini, with Qwen on Groq as a backup) to answer you. Sidekick does not store photos.</li>
 </ul>
 
 <h2>How it is used</h2>
 <p>Only to answer your requests. To write a reply, the text of your request and any calendar or email content
 Sidekick read for it are sent to the AI model provider generating the reply (currently Groq, with Google Gemini
-as a fallback). Sidekick does not sell data, show ads, or use it for anything else.</p>
+as a fallback, and Gemini first for photos). Sidekick uses Gemini's free tier, where Google may use submitted
+content to improve its products. Sidekick does not sell data, show ads, or use it for anything else.</p>
 
 <h2>What is stored, and where</h2>
 <ul>
   <li>On Sidekick's server (Amazon Web Services, United States): your reminders, tasks, pending approvals, a short
     history of actions taken, and the Google sign-in token. The database is backed up to Amazon S3, encrypted at
     rest.</li>
-  <li>Server logs record metadata only (timings, which tools ran), never message text or email content.</li>
+  <li>Server logs and the saved request traces (kept 90 days) record metadata only (timings, which models and
+    tools ran), never message text, photos or email content.</li>
   <li>Email and calendar content is not stored; it is read when needed to answer a request.</li>
 </ul>
 

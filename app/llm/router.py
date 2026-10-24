@@ -9,7 +9,7 @@ import logging
 import time
 from dataclasses import dataclass
 
-from app.config import GEMINI_API_KEY, GROQ_API_KEY, LLM_BLOCK_SENSITIVE, LLM_CANDIDATES
+from app.config import GEMINI_API_KEY, GROQ_API_KEY, LLM_BLOCK_SENSITIVE, LLM_CANDIDATES, LLM_VISION_CANDIDATES
 from app.llm.gemini import GeminiAdapter
 from app.llm.openai_compat import OpenAICompatAdapter
 from app.llm.types import Attempt, LLMResponse, Message, ProviderError, ToolSpec
@@ -67,8 +67,10 @@ class AllProvidersFailed(Exception):
 
 class Router:
     def __init__(self, candidates: list[Candidate], adapters: dict, cooldown: float = 300,
-                 retry_wait: float = 2.0, sleep=time.sleep, clock=time.time):
+                 retry_wait: float = 2.0, sleep=time.sleep, clock=time.time,
+                 vision_candidates: list[Candidate] | None = None):
         self.candidates = candidates
+        self.vision_candidates = vision_candidates or []  # own order for photos; empty = same list as text
         self.adapters = adapters
         self.cooldown = cooldown
         self.retry_wait = retry_wait
@@ -78,9 +80,10 @@ class Router:
     def complete(self, messages: list[Message], tools: list[ToolSpec], system: str,
                  sensitive: bool = False) -> LLMResponse:
         has_images = any(m.images for m in messages)
+        candidates = self.vision_candidates if has_images and self.vision_candidates else self.candidates
         attempts: list[Attempt] = []
         eligible = []
-        for c in (c for c in self.candidates if c.provider in self.adapters):
+        for c in (c for c in candidates if c.provider in self.adapters):
             # Record who was excluded and why, so the trace and the user see the real reason.
             if sensitive and not c.allow_sensitive:
                 attempts.append(Attempt(c.key, "privacy_blocked"))
@@ -146,4 +149,5 @@ def default_router() -> Router:
     missing = sorted({c.provider for c in candidates} - adapters.keys())
     if missing:
         log.info("No API key for %s: those candidates are skipped", ", ".join(missing))
-    return Router(candidates, adapters)
+    return Router(candidates, adapters,
+                  vision_candidates=parse_candidates(LLM_VISION_CANDIDATES, LLM_BLOCK_SENSITIVE))

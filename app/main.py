@@ -12,7 +12,7 @@ from app import db, reminders
 from app.agent import PENDING, decide, handle_approval, run_agent
 from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
 from app.config import OWNER_TIMEZONE, SCHEDULER_ENABLED, TELEGRAM_OWNER_ID, TELEGRAM_WEBHOOK_SECRET
-from app.db.store import first_time_seen, recent_actions
+from app.db.store import first_time_seen, recent_actions, save_trace
 from app.logging_setup import RequestIdMiddleware, setup_logging
 from app.telegram import answer_button, approval_buttons, download_photo, remove_buttons, send_message
 from app.trace import ToolContext
@@ -134,7 +134,9 @@ PHOTO_PROMPT = ("What's in this photo? If it shows dates, times or events, list 
 def agent_reply(ctx: ToolContext, text: str, images: list | None = None) -> tuple[str, list | None]:
     """Run the agent; returns the reply and the buttons to show under it."""
     result = run_agent(text, ctx, images=images)
-    log.info("trace %s", result.trace.to_log())
+    trace_json = result.trace.to_log()
+    log.info("trace %s", trace_json)
+    save_trace(ctx.chat_id, result.trace.trace_id, result.trace.outcome, trace_json)  # survives redeploys
     if result.trace.outcome == "approval_staged" and (pending := PENDING.peek(ctx.chat_id)):
         return result.reply, approval_buttons(pending["id"])  # ✅ / ❌ under the proposal
     if result.undo_reminder_id:

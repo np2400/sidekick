@@ -56,5 +56,10 @@ LLM_CANDIDATES = os.getenv("LLM_CANDIDATES") or (
     "groq:openai/gpt-oss-120b,groq:qwen/qwen3.8-27b,gemini:gemini-3.5-flash,gemini:gemini-3.8-flash,"
     "gemini:gemini-3.5-flash-lite,gemini:gemini-3.1-flash-lite"
 )
+# Order for messages with a photo (only models that can see). Gemini first: on the same photo it was right
+# 5/5 vs Qwen 1/4 (2026-10-24). Trade-off: Google's free tier may use content to improve its products.
+LLM_VISION_CANDIDATES = os.getenv("LLM_VISION_CANDIDATES") or (
+    "gemini:gemini-3.5-flash,groq:qwen/qwen3.8-27b,gemini:gemini-3.8-flash"
+)
 # Providers that must NOT see sensitive content (email bodies/previews), e.g. "groq". Empty = all allowed.
 LLM_BLOCK_SENSITIVE = {p.strip() for p in os.getenv("LLM_BLOCK_SENSITIVE", "").split(",") if p.strip()}
