@@ -53,7 +53,7 @@ def client(monkeypatch):
     monkeypatch.setattr(main, "TELEGRAM_OWNER_ID", str(OWNER))
     sent, agent_calls = [], []
     monkeypatch.setattr(main, "send_message", lambda chat_id, reply, buttons=None: sent.append((chat_id, reply)))
-    monkeypatch.setattr(main, "run_agent", lambda text, ctx: agent_calls.append(text) or AgentResult("hi!", Trace()))
+    monkeypatch.setattr(main, "run_agent", lambda text, ctx, **_: agent_calls.append(text) or AgentResult("hi!", Trace()))
     c = TestClient(main.app)
     c.sent, c.agent_calls = sent, agent_calls
     c.headers.update({"X-Telegram-Bot-Api-Secret-Token": "test-secret"})
@@ -108,7 +108,7 @@ def test_every_line_of_one_request_shares_one_id_and_the_trace_uses_it(monkeypat
     monkeypatch.setattr(main, "TELEGRAM_OWNER_ID", str(OWNER))
     monkeypatch.setattr(main, "send_message", lambda chat_id, reply, buttons=None: None)
     traces = []
-    monkeypatch.setattr(main, "run_agent", lambda text, ctx: traces.append(Trace()) or AgentResult("ok", traces[-1]))
+    monkeypatch.setattr(main, "run_agent", lambda text, ctx, **_: traces.append(Trace()) or AgentResult("ok", traces[-1]))
     caplog.set_level(logging.INFO)
     c = TestClient(main.app, headers={"X-Telegram-Bot-Api-Secret-Token": "test-secret"})
 

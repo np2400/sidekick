@@ -20,9 +20,16 @@ class ToolCall:
 
 
 @dataclass
+class Image:
+    mime: str   # e.g. "image/jpeg"
+    data: bytes
+
+
+@dataclass
 class Message:
     role: str                                   # "user" | "assistant" | "tool"
     text: str = ""
+    images: list[Image] = field(default_factory=list)  # user only: attached photos
     tool_calls: list[ToolCall] = field(default_factory=list)  # assistant only
     tool_call_id: str = ""                      # tool only: which call this answers
     tool_name: str = ""                         # tool only

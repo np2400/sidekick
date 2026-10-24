@@ -217,7 +217,7 @@ def message(bot, update_id, body):
 
 
 def test_reminder_reply_has_undo_and_undo_cancels_it(bot, monkeypatch):
-    def fake_agent(text_, ctx):
+    def fake_agent(text_, ctx, **_):
         llm = ScriptedProvider([call("create_reminder", text="Call Dad", remind_at="2026-10-22T10:00:00")],
                                [text("Reminder set.")])
         return run_agent(text_, ctx, llm=llm)

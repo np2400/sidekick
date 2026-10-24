@@ -1,4 +1,5 @@
 """Gemini adapter: neutral Messages <-> Gemini generateContent."""
+import base64
 import json
 import time
 import uuid
@@ -24,7 +25,9 @@ class GeminiAdapter:
         foreign_calls: set[str] = set()  # tool calls written by another provider
         for m in messages:
             if m.role == "user":
-                contents.append({"role": "user", "parts": [{"text": m.text}]})
+                photos = [{"inlineData": {"mimeType": i.mime, "data": base64.b64encode(i.data).decode()}}
+                          for i in m.images]
+                contents.append({"role": "user", "parts": [{"text": m.text}] + photos})
             elif m.role == "assistant" and m.provider == self.name and m.raw:
                 contents.append(m.raw)  # our own turn: send back verbatim (keeps thought signatures intact)
             elif m.role == "assistant":

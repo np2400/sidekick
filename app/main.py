@@ -14,7 +14,7 @@ from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
 from app.config import OWNER_TIMEZONE, SCHEDULER_ENABLED, TELEGRAM_OWNER_ID, TELEGRAM_WEBHOOK_SECRET
 from app.db.store import first_time_seen, recent_actions
 from app.logging_setup import RequestIdMiddleware, setup_logging
-from app.telegram import answer_button, approval_buttons, remove_buttons, send_message
+from app.telegram import answer_button, approval_buttons, download_photo, remove_buttons, send_message
 from app.trace import ToolContext
 
 setup_logging()  # timestamp + request id on every line; LOG_LEVEL=DEBUG shows content (laptop only)
@@ -82,16 +82,17 @@ def telegram_webhook(
         return {"ok": True}
 
     message = update.get("message") or {}
-    text = message.get("text")
+    photos = message.get("photo") or []  # one photo, in several sizes
+    text = message.get("text") or message.get("caption") or ""  # a photo's text arrives as its caption
     chat_id = message.get("chat", {}).get("id")
     sender_id = str(message.get("from", {}).get("id", ""))
     # Metadata only: the message itself is the user's private content.
-    log.info("Telegram update %s from %s (%d chars)", update_id, sender_id, len(text or ""))
+    log.info("Telegram update %s from %s (%d chars%s)", update_id, sender_id, len(text), ", photo" if photos else "")
     log.debug("Message text: %r", text)
 
-    # 3. Ignore anything that isn't a text message (photos, stickers, edits...).
+    # 3. Ignore anything that isn't text or a photo (stickers, voice, edits...).
     #    Still return 200, or Telegram keeps retrying the same update.
-    if not text or chat_id is None:
+    if not (text or photos) or chat_id is None:
         return {"ok": True}
 
     # 4. Authorize: only the owner may talk to Sidekick.
@@ -104,7 +105,13 @@ def telegram_webhook(
     # 6. Think: otherwise the model (via the router) decides whether to answer directly or call a Python tool.
     command = text.strip().lower()
     buttons = None
-    if command in BRIEF_TRIGGERS or command in TOMORROW_TRIGGERS:
+    if photos:
+        image = download_photo(photos)
+        if image is None:
+            reply = "Sorry, I couldn't download that photo. Try sending it again."
+        else:
+            reply, buttons = agent_reply(ctx, text or PHOTO_PROMPT, images=[image])
+    elif command in BRIEF_TRIGGERS or command in TOMORROW_TRIGGERS:
         # Fixed command: Python gathers facts, the model only writes the summary.
         reply = build_brief(days_ahead=1 if command in TOMORROW_TRIGGERS else 0, ctx=ctx)
     elif command == "/history":
@@ -114,15 +121,25 @@ def telegram_webhook(
     else:
         reply = handle_approval(ctx, text)
         if reply is None:
-            result = run_agent(text, ctx)
-            log.info("trace %s", result.trace.to_log())
-            reply = result.reply
-            if result.trace.outcome == "approval_staged" and (pending := PENDING.peek(chat_id)):
-                buttons = approval_buttons(pending["id"])  # ✅ / ❌ under the proposal
-            elif result.undo_reminder_id:
-                buttons = [("↩️ Undo", f"undo:{result.undo_reminder_id}")]  # reminders: created now, undoable
+            reply, buttons = agent_reply(ctx, text)
     send_message(chat_id, reply, buttons=buttons)
     return {"ok": True}
+
+
+# Used when a photo arrives without a caption.
+PHOTO_PROMPT = ("What's in this photo? If it shows dates, times or events, list them and offer to add "
+                "reminders or calendar events.")
+
+
+def agent_reply(ctx: ToolContext, text: str, images: list | None = None) -> tuple[str, list | None]:
+    """Run the agent; returns the reply and the buttons to show under it."""
+    result = run_agent(text, ctx, images=images)
+    log.info("trace %s", result.trace.to_log())
+    if result.trace.outcome == "approval_staged" and (pending := PENDING.peek(ctx.chat_id)):
+        return result.reply, approval_buttons(pending["id"])  # ✅ / ❌ under the proposal
+    if result.undo_reminder_id:
+        return result.reply, [("↩️ Undo", f"undo:{result.undo_reminder_id}")]  # reminders: created now, undoable
+    return result.reply, None
 
 
 BUTTONS = {

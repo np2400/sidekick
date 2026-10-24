@@ -2,6 +2,7 @@
 
 Groq today; OpenRouter or others later are just a different base_url + key in config.
 """
+import base64
 import json
 import re
 import time
@@ -12,6 +13,10 @@ import httpx
 from app.llm.types import LLMResponse, Message, ProviderError, ToolCall, ToolSpec, classify_status
 
 THINK = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def b64(data: bytes) -> str:
+    return base64.b64encode(data).decode()
 
 
 class OpenAICompatAdapter:
@@ -30,7 +35,12 @@ class OpenAICompatAdapter:
     def to_messages(messages: list[Message], system: str) -> list[dict]:
         out = [{"role": "system", "content": system}]
         for m in messages:
-            if m.role == "user":
+            if m.role == "user" and m.images:
+                # A photo travels inline as a data URL next to the text.
+                out.append({"role": "user", "content": [{"type": "text", "text": m.text}] + [
+                    {"type": "image_url", "image_url": {"url": f"data:{i.mime};base64,{b64(i.data)}"}}
+                    for i in m.images]})
+            elif m.role == "user":
                 out.append({"role": "user", "content": m.text})
             elif m.role == "assistant":
                 msg = {"role": "assistant", "content": m.text or None}

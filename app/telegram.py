@@ -4,9 +4,13 @@ import logging
 import httpx
 
 from app.config import TELEGRAM_BOT_TOKEN
+from app.llm.types import Image
 
 log = logging.getLogger("sidekick.telegram")
 API = "https://api.telegram.org"
+# Groq resizes images itself (~1,300 tokens whatever the size), so take the largest Telegram size up to
+# 1280 px: text on a flyer stays readable and the upload stays small.
+PHOTO_MAX_SIDE = 1280
 
 
 def redact(text: str) -> str:
@@ -34,6 +38,27 @@ def send_message(chat_id: int, text: str, buttons: list[tuple[str, str]] | None 
     if not result.get("ok"):
         log.error("sendMessage failed: %s", result.get("description"))
     return result
+
+
+def download_photo(sizes: list[dict]) -> Image | None:
+    """Telegram sends one photo in several sizes; fetch the largest that fits PHOTO_MAX_SIDE."""
+    def area(s: dict) -> int:
+        return s.get("width", 0) * s.get("height", 0)
+    fitting = [s for s in sizes if max(s.get("width", 0), s.get("height", 0)) <= PHOTO_MAX_SIDE]
+    best = max(fitting, key=area) if fitting else min(sizes, key=area)
+
+    info = call("getFile", {"file_id": best["file_id"]})  # step 1: where is the file?
+    path = info.get("result", {}).get("file_path")
+    if not path:
+        log.error("getFile failed: %s", info.get("description"))
+        return None
+    try:  # step 2: download it (the token is in this URL too, so errors are redacted)
+        response = httpx.get(f"{API}/file/bot{TELEGRAM_BOT_TOKEN}/{path}", timeout=20)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        log.error("Photo download failed: %s", redact(str(exc)))
+        return None
+    return Image(mime="image/jpeg", data=response.content)  # Telegram stores photos as JPEG
 
 
 def approval_buttons(action_id: int) -> list[tuple[str, str]]:

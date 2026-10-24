@@ -12,7 +12,7 @@ from app.db.store import PendingStore, log_action
 from app.gcal import create_event, list_events, validate_event
 from app.gmail import read_email, search_emails
 from app.llm.router import AllProvidersFailed, default_router
-from app.llm.types import Message, ToolSpec
+from app.llm.types import Image, Message, ToolSpec
 from app.mcp_client import call_mcp_tool, discover_mcp_tools
 from app.trace import AgentResult, ToolContext, Trace
 from app.web_search import RECENT, web_search
@@ -36,6 +36,8 @@ SYSTEM_PROMPT = (
     "Reminders are different: call create_reminder right away with remind_at as an ISO date-time in the owner's "
     "timezone, worked out from the current time below. They are created immediately and the user can undo them. "
     "Never describe the user's calendar, tasks, reminders or email without calling the matching tool first. "
+    "If the user sends a photo (a flyer, schedule, ticket or screenshot), read it carefully, including dates, "
+    "times and places; use the reminder and calendar tools as usual when they ask. "
     "For anything current or that may have changed (news, weather, prices, opening hours), call web_search "
     "and mention the source site. One search is usually enough: answer from the snippets, and use web_fetch "
     "only if they don't answer the question. "
@@ -357,16 +359,18 @@ def tool_specs(tools: dict) -> list[ToolSpec]:
             for d in declarations]
 
 
-def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None = None) -> AgentResult:
+def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None = None,
+              images: list[Image] | None = None) -> AgentResult:
     """The agent loop. `llm` (default: the model router) and `tools` are injectable so tests can
-    swap in fakes without changing this function."""
+    swap in fakes without changing this function. `images`: photos the user attached."""
     tools = TOOLS if tools is None else tools
     llm = llm or default_router().complete
     trace = Trace()
     undo_id = None
-    messages = [Message(role="user", text=user_text)]
+    messages = [Message(role="user", text=user_text, images=images or [])]
     specs = tool_specs(tools)
-    sensitive = False  # flips to True once private content (email) is in the conversation
+    # True once private content is in the conversation: email, or a photo (it may show personal details).
+    sensitive = bool(images)
     used: dict[str, int] = {}  # tool calls so far in this message, checked against TOOL_BUDGET
 
     for step in range(1, MAX_STEPS + 1):

@@ -84,6 +84,17 @@ def test_circuit_breaker_skips_a_failed_model_then_tries_it_again_after_cooldown
     assert r.provider == "gemini" and len(gemini.calls) == 2
 
 
+def test_rate_limited_model_is_benched_for_one_minute_only():
+    gemini, groq = FakeAdapter("gemini", "rate_limit"), FakeAdapter("groq")
+    router, clock = make([gemini, groq], [A, B])
+
+    router.complete(MSG, [], "sys")                      # 429 -> benched
+    clock.now += 30
+    assert router.complete(MSG, [], "sys").provider == "groq"    # still benched
+    clock.now += 31
+    assert router.complete(MSG, [], "sys").provider == "gemini"  # per-minute quota has reset
+
+
 def test_too_large_request_falls_back_without_benching_the_model():
     assert classify_status(413) == "too_large"  # Groq: request bigger than the free tokens-per-minute limit
     gemini, groq = FakeAdapter("gemini", "too_large"), FakeAdapter("groq")

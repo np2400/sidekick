@@ -13,6 +13,7 @@ Built from scratch in Python (FastAPI), with no agent framework: a hand-written 
 ## What it does
 
 - **Chat on Telegram:** "What's on my calendar tomorrow?", "Add a task to call the dentist", "Summarize Sam's latest email", "/brief".
+- **Photos:** send a flyer, schedule or screenshot and ask about it, or have it turned into reminders and events. Photos go only to models that can see (capability-aware routing); text-only models are skipped.
 - **Reminders on Telegram:** "Remind me to call Dad tomorrow at 10", "every weekday at 9am". They arrive with Done, Snooze 1 hour and Tomorrow buttons, and survive restarts.
 - **Built-in task list** stored in Sidekick's own database (or Todoist, if you prefer).
 - **Approval before outside writes:** the model can only *propose* a task or calendar event; code holds it until you tap ✅. Your own reminders are created immediately with an Undo button.

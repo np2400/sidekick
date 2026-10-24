@@ -19,6 +19,10 @@ log = logging.getLogger("sidekick.router")
 # Retry the SAME model only for short-lived trouble. A timeout already cost ~25 s and a 429 is usually a
 # quota that won't reset in 2 s, so those go straight to the next model.
 RETRY_SAME = {"overloaded", "network"}
+# Groq's free limits are per minute, so a rate-limited model is benched for a minute, not the full cooldown.
+RATE_LIMIT_COOLDOWN = 60
+# Non-Gemini models that accept images, checked live (2026-10-24). Gemini models all do; GPT-OSS doesn't.
+VISION_MODELS = {"groq:qwen/qwen3.8-27b"}
 
 # USD per 1M tokens (input, output), paid tier, from Google's pricing page (Oct 2026; 3.8 rises Jan 2027).
 # Unknown prices stay unknown: cost is reported as null rather than guessed. Free tier actually costs $0.
@@ -43,6 +47,7 @@ class Candidate:
     model: str
     timeout: float = 25.0
     allow_sensitive: bool = True  # may this provider see email contents etc.?
+    vision: bool = False          # can it read images?
 
     @property
     def key(self) -> str:
@@ -72,10 +77,17 @@ class Router:
 
     def complete(self, messages: list[Message], tools: list[ToolSpec], system: str,
                  sensitive: bool = False) -> LLMResponse:
-        configured = [c for c in self.candidates if c.provider in self.adapters]
-        eligible = [c for c in configured if c.allow_sensitive or not sensitive]
-        # Record who was excluded for privacy, so the trace and the user see the real reason.
-        attempts: list[Attempt] = [Attempt(c.key, "privacy_blocked") for c in configured if c not in eligible]
+        has_images = any(m.images for m in messages)
+        attempts: list[Attempt] = []
+        eligible = []
+        for c in (c for c in self.candidates if c.provider in self.adapters):
+            # Record who was excluded and why, so the trace and the user see the real reason.
+            if sensitive and not c.allow_sensitive:
+                attempts.append(Attempt(c.key, "privacy_blocked"))
+            elif has_images and not c.vision:
+                attempts.append(Attempt(c.key, "no_vision"))
+            else:
+                eligible.append(c)
         if not eligible:
             raise AllProvidersFailed(attempts or [Attempt("none", "no_eligible_candidate")])
 
@@ -101,8 +113,9 @@ class Router:
                 return response
             if attempts[-1].kind == "too_large":
                 continue  # this request was too big for it; the model itself is fine for the next one
-            self.skip_until[c.key] = self.clock() + self.cooldown
-            log.warning("LLM %s unavailable, skipping it for %ds", c.key, self.cooldown)
+            cooldown = RATE_LIMIT_COOLDOWN if attempts[-1].kind == "rate_limit" else self.cooldown
+            self.skip_until[c.key] = self.clock() + cooldown
+            log.warning("LLM %s unavailable, skipping it for %ds", c.key, cooldown)
         raise AllProvidersFailed(attempts)
 
 
@@ -111,7 +124,8 @@ def parse_candidates(spec: str, block_sensitive: set[str]) -> list[Candidate]:
     out = []
     for item in filter(None, (s.strip() for s in spec.split(","))):
         provider, model = item.split(":", 1)
-        out.append(Candidate(provider, model, allow_sensitive=provider not in block_sensitive))
+        out.append(Candidate(provider, model, allow_sensitive=provider not in block_sensitive,
+                             vision=provider == "gemini" or item in VISION_MODELS))
     return out
 
 

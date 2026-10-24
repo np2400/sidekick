@@ -105,7 +105,7 @@ def press(bot, update_id, data, sender=OWNER):
 
 
 def test_a_proposal_is_sent_with_yes_no_buttons(bot, monkeypatch):
-    def fake_agent(text_, ctx):
+    def fake_agent(text_, ctx, **_):
         PENDING.stage(ctx.chat_id, ctx.user_id, "create_task", {"content": "Call Dad"})
         return AgentResult("Create 'Call Dad'?", Trace(outcome="approval_staged"))
     monkeypatch.setattr(main, "run_agent", fake_agent)
