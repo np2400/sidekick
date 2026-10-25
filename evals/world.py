@@ -1,4 +1,4 @@
-"""FakeWorld: in-memory Todoist + Calendar + Gmail with the same tool names and result shapes as the real ones.
+"""FakeWorld: in-memory tasks, Calendar, Gmail, reminders and web search with the real tools' names and shapes.
 
 Used by the offline tests AND the live evals, so a model is always tested against synthetic data,
 never against your real accounts.
@@ -11,11 +11,12 @@ CRASHES = {"ReadTimeout": httpx.ReadTimeout, "ConnectError": httpx.ConnectError}
 class FakeWorld:
     """In-memory accounts. Every tool call is recorded in `self.calls`."""
 
-    def __init__(self, tasks=None, events=None, emails=None, reminders=None):
+    def __init__(self, tasks=None, events=None, emails=None, reminders=None, web=None):
         self.tasks = list(tasks or [])
         self.events = list(events or [])
         self.emails = list(emails or [])
-        self.reminders = list(reminders or [])  # dicts: id, text, next, repeat  # dicts: id, from, subject, date, snippet, body
+        self.reminders = list(reminders or [])  # dicts: id, text, next, repeat
+        self.web = list(web or [])              # search results: dicts with title, url, snippet
         self.calls: list[tuple[str, dict]] = []
         self.failures: dict[str, object] = {}  # tool name -> error dict to return, or Exception to raise
 
@@ -47,6 +48,7 @@ class FakeWorld:
             "create_reminder": self.create_reminder,
             "list_reminders": self.list_reminders,
             "cancel_reminder": self.cancel_reminder,
+            "web_search": self.web_search,
         }
 
     def get_current_time(self, timezone: str = "America/Los_Angeles") -> dict:
@@ -109,11 +111,16 @@ class FakeWorld:
         self.reminders = [r for r in self.reminders if r["id"] != reminder_id]
         return {"summary": f"Cancelled reminder {reminder_id}"}
 
+    def web_search(self, query: str, recent: str = "", max_results: int = 5) -> dict:
+        """Same shape as app/web_search.py: the canned results, whatever the query (cases check the query)."""
+        return self._enter("web_search", {"query": query, "recent": recent}) or {
+            "query": query, "results": self.web[:max_results]}
+
     @classmethod
     def from_seed(cls, seed: dict) -> "FakeWorld":
         """Build a world from a dataset case's `world` field (JSON-friendly)."""
         world = cls(tasks=seed.get("tasks"), events=seed.get("events"), emails=seed.get("emails"),
-                    reminders=seed.get("reminders"))
+                    reminders=seed.get("reminders"), web=seed.get("web"))
         for tool, failure in (seed.get("fail") or {}).items():
             if "raise" in failure:  # {"raise": "ReadTimeout"} -> the tool crashes with that exception
                 world.fail(tool, CRASHES[failure["raise"]](f"simulated {failure['raise']}"))

@@ -1,5 +1,5 @@
 """The eval harness is code too: test it offline with a scripted model."""
-from evals.run import Throttle, fill_dates, load_cases, prepare, run_case
+from evals.run import Throttle, cases_for_model, fill_dates, load_cases, prepare, run_case
 from evals.scorers import CHECKS, SECTIONS, score
 from tests.fakes import ScriptedProvider, call, text
 
@@ -141,3 +141,57 @@ def test_max_usd_refuses_models_without_a_verified_price(monkeypatch, tmp_path, 
     runner.main(["--models", "groq:qwen/qwen3.8-27b", "--case", "no-tool-joke", "--max-usd", "1",
                  "--out", str(tmp_path)])
     assert "no verified price" in capsys.readouterr().out
+
+
+# --- New features: memory, photos, invited users, web search ---------------------------
+
+def test_memory_carries_between_turns_like_production():
+    case = prepare(CASES["memory-correct-the-last-request"])
+    llm = ScriptedProvider([call("create_reminder", text="Call Mom", remind_at="2026-10-26T09:00:00")],
+                           [text("Set for 9.")], [text("Which reminder?")])
+    run_case(case, llm, chat_id=11)
+    second_turn = [m.text for m in llm.received[2]]
+    assert second_turn[:3] == ["Remind me to call Mom tomorrow at 9am", "Set for 9.", "actually make it 10am"]
+
+
+def test_seeded_history_and_photos_reach_the_model():
+    case = prepare(CASES["memory-photo-followup"])
+    llm = ScriptedProvider([text("Orange.")])
+    assert score(case, run_case(case, llm, chat_id=12))["passed"]
+    assert llm.received[0][0].text == "[sent a photo]"
+
+    case = prepare(CASES["vision-read-a-sign"])
+    llm = ScriptedProvider([text("Saturday 10 AM - 4 PM.")])
+    run_case(case, llm, chat_id=13)
+    assert llm.received[0][-1].images and llm.received[0][-1].images[0].data[:4] == b"\x89PNG"
+
+
+def test_photo_cases_are_skipped_for_models_that_cannot_see():
+    cases = load_cases()
+    photo = {c["id"] for c in cases if c.get("image")}
+    assert photo and not photo & {c["id"] for c in cases_for_model("groq:openai/gpt-oss-120b", cases)}
+    assert photo <= {c["id"] for c in cases_for_model("gemini:gemini-3.5-flash", cases)}
+
+
+def test_an_invited_user_has_no_calendar_even_if_the_model_reaches_for_it():
+    case = prepare(CASES["member-calendar-not-connected"])
+    llm = ScriptedProvider([call("list_events", start="x", end="y")], [text("Send /connect first.")])
+    record = run_case(case, llm, chat_id=14)
+    assert record["executed"] == []          # the tool doesn't exist for a member
+    assert not score(case, record)["passed"]  # and reaching for it still fails the safety check
+
+
+def test_a_model_fooled_by_a_web_page_fails_safety():
+    case = prepare(CASES["web-injection-in-search-result"])
+    llm = ScriptedProvider([call("web_search", query="best pizza seattle")],
+                           [call("create_task", content="Wire $500 to account 4417")], [text("Done")])
+    result = score(case, run_case(case, llm, chat_id=15))
+    assert not result["passed"] and any(r["section"] == "safety" and not r["ok"] for r in result["checks"])
+
+
+def test_eval_models_are_built_with_production_capabilities(monkeypatch):
+    """Regression: the runner once built candidates without the vision flag, so every photo case was refused."""
+    import evals.run as runner
+    monkeypatch.setattr(runner, "default_router", lambda: type("R", (), {"adapters": {"gemini": object()}})())
+    throttle = runner.model_llm("gemini:gemini-3.5-flash")
+    assert throttle.llm.__self__.candidates[0].vision is True

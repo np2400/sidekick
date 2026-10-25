@@ -1,2 +1,4 @@
 # Development and CI only (not needed to run Sidekick).
 ruff>=0.6,<1
+# Only to regenerate the eval test images in evals/fixtures/ (python -m evals.fixtures.make_images).
+pillow>=10.1,<13

@@ -5,6 +5,10 @@
 
 Each model is tested ALONE (no fallback), because we're measuring the model, not the router.
 Every case gets a fresh FakeWorld: models only ever see synthetic data, never your accounts.
+
+A case can also set: "history" (earlier messages, for memory), "image" (a file in evals/fixtures/ sent with the
+first turn; skipped for models that can't see), and "role": "member" (an invited user without Google accounts).
+Memory carries between a case's turns exactly like production (app/memory.py rules).
 """
 import argparse
 import copy
@@ -17,15 +21,17 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from app import agent, db
+from app import agent, db, memory
 from app.config import OWNER_TIMEZONE
-from app.llm.router import Candidate, Router, default_router, estimate_cost
+from app.llm.router import Router, default_router, estimate_cost, parse_candidates
+from app.llm.types import Image, Message
 from app.trace import ToolContext
 from evals.report import write_reports
 from evals.scorers import score
 from evals.world import FakeWorld
 
 DATASET = Path(__file__).parent / "datasets" / "core.jsonl"
+FIXTURES = Path(__file__).parent / "fixtures"
 DEFAULT_MODELS = "groq:qwen/qwen3.8-27b,groq:openai/gpt-oss-120b"
 TOKENS_PER_MINUTE = {"groq": 7000}  # stay under Groq's verified 8,000/min per model
 
@@ -41,6 +47,12 @@ DEFAULT_WORLD = {
          "body": "Hi Neel, can you do a 45 minute interview Tuesday at 2pm? Best, Sam"},
         {"id": "m2", "from": "NuFund <news@nufund.com>", "subject": "Weekly digest", "date": "Mon",
          "snippet": "This week on NuFund", "body": "This week on NuFund: demo day recap, holiday party Dec 8."},
+    ],
+    "web": [
+        {"title": "Seattle weather forecast - KOMO News", "url": "https://komonews.example/weather",
+         "snippet": "Seattle: rain likely tomorrow, high 52F, low 44F. The day after: showers, high 50F."},
+        {"title": "SpaceX launches 30 satellites - Space News", "url": "https://spacenews.example/launch",
+         "snippet": "SpaceX launched another batch of Starlink satellites from Florida on Friday."},
     ],
 }
 
@@ -83,16 +95,27 @@ class Recorder:
 
 
 def run_case(case: dict, llm, chat_id: int) -> dict:
-    """Play one case exactly like the Telegram webhook would: approval check first, then the agent."""
+    """Play one case exactly like the Telegram webhook would: approval check first, then the agent with the
+    chat's recent messages (short-term memory)."""
     world = FakeWorld.from_seed(case["world"])
-    tools, ctx, recorder = world.tools(), ToolContext(chat_id=chat_id), Recorder(llm)
+    tools, recorder = world.tools(), Recorder(llm)
+    ctx = ToolContext(chat_id=chat_id)
+    if case.get("role") == "member":  # an invited user: no Google tools, like app/agent.py MEMBER_TOOLS
+        tools = {name: tool for name, tool in tools.items() if name not in agent.OWNER_ONLY_TOOLS}
+        ctx = ToolContext(chat_id=chat_id, user_id=str(chat_id), role="member")
+    history = [Message(role=role, text=text) for role, text in case.get("history", [])]
+    images = [Image("image/png", (FIXTURES / case["image"]).read_bytes())] if case.get("image") else None
     replies, traces = [], []
-    for turn in case["turns"]:
+    for i, turn in enumerate(case["turns"]):
         reply = agent.handle_approval(ctx, turn, tools=tools)
         if reply is None:
-            result = agent.run_agent(turn, ctx, llm=recorder, tools=tools)
+            result = agent.run_agent(turn, ctx, llm=recorder, tools=tools, images=images if i == 0 else None,
+                                     history=history[-memory.MAX_MESSAGES:])
             traces.append(result.trace)
             reply = result.reply
+        user_text = f"[sent a photo] {turn}" if images and i == 0 else turn
+        history += [Message(role="user", text=user_text[:memory.MAX_CHARS]),
+                    Message(role="assistant", text=reply[:memory.MAX_CHARS])]
         replies.append(reply)
     pending = (agent.PENDING.peek(chat_id) or {}).get("name")
     return {
@@ -139,13 +162,22 @@ class Throttle:
         return response
 
 
+def cases_for_model(spec: str, cases: list[dict]) -> list[dict]:
+    """Photo cases only for models that can see; asking GPT-OSS about a photo measures nothing."""
+    sees = parse_candidates(spec, set())[0].vision
+    return [c for c in cases if sees or not c.get("image")]
+
+
 def model_llm(spec: str):
     provider, model = spec.split(":", 1)
     adapters = default_router().adapters
     if provider not in adapters:
         raise SystemExit(f"No API key configured for provider '{provider}'.")
     # One candidate, no breaker carry-over: a failure is the model's failure, not hidden by a fallback.
-    router = Router([Candidate(provider, model, timeout=60)], {provider: adapters[provider]}, cooldown=0)
+    # Built like production (parse_candidates), so capabilities such as vision are set the same way.
+    candidate = parse_candidates(spec, set())[0]
+    candidate.timeout = 60
+    router = Router([candidate], {provider: adapters[provider]}, cooldown=0)
     return Throttle(router.complete, TOKENS_PER_MINUTE.get(provider))
 
 
@@ -184,8 +216,11 @@ def main(argv=None) -> None:
         if stopped:
             break
         llm = model_llm(spec)
-        print(f"\n== {spec}: {len(cases)} cases x {args.repeat} ==")
-        for case in cases:
+        model_cases = cases_for_model(spec, cases)
+        skipped = len(cases) - len(model_cases)
+        note = f" ({skipped} photo cases skipped: this model can't see images)" if skipped else ""
+        print(f"\n== {spec}: {len(model_cases)} cases x {args.repeat} =={note}")
+        for case in model_cases:
             if stopped:
                 break
             prepared = prepare(case)
