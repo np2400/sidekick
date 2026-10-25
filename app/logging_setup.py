@@ -53,6 +53,22 @@ def setup_logging() -> None:
     for noisy in ("httpx", "httpcore"):  # httpx logs full URLs, which contain the bot token
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, HideQueryStrings) for f in access.filters):
+        access.addFilter(HideQueryStrings())
+
+
+class HideQueryStrings(logging.Filter):
+    """Access lines show the path without its ?query: the Google sign-in callback carries one-time codes there."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # uvicorn's access record args: (client, method, path_with_query, http_version, status)
+        if isinstance(record.args, tuple) and len(record.args) >= 3 and isinstance(record.args[2], str):
+            args = list(record.args)
+            args[2] = args[2].split("?", 1)[0]
+            record.args = tuple(args)
+        return True
+
 
 class RequestIdMiddleware:
     """Gives each HTTP request its own id for the whole time it is being handled."""

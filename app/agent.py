@@ -78,23 +78,35 @@ TOOLS = {
 if TASK_BACKEND == "native":
     TOOLS["complete_task"] = native_tasks.complete_task
 
-# Members (invited friends) never get the owner's accounts: Google Calendar and Gmail are the owner's, and
-# their tasks always live in Sidekick's own list (not the owner's Todoist). Leaving tools out is the guard:
-# a model can be talked into calling a tool, but not one that doesn't exist for this user.
+# Members (invited friends) never get the owner's accounts: the owner's Gmail and Todoist, and the owner's
+# calendar. Their tasks always live in Sidekick's own list. Leaving tools out is the guard: a model can be
+# talked into calling a tool, but not one that doesn't exist for this user.
 OWNER_ONLY_TOOLS = {"list_events", "create_event", "search_emails", "read_email"}
 MEMBER_TOOLS = {name: tool for name, tool in TOOLS.items() if name not in OWNER_ONLY_TOOLS} | {
     "list_tasks": native_tasks.list_tasks, "create_task": native_tasks.create_task,
     "complete_task": native_tasks.complete_task,
 }
+# A member who connected their OWN Google account (/connect, /connect gmail) also gets those tools. The same
+# functions, but google_auth.token_for(ctx) makes them use that member's token, never the owner's.
+CALENDAR_TOOLS = {"list_events": list_events, "create_event": create_event}
+GMAIL_TOOLS = {"search_emails": search_emails, "read_email": read_email}
+# One fixed registry per combination (calendar?, gmail?), so _real() can recognize them.
+MEMBER_REGISTRIES = {
+    (calendar, gmail): (MEMBER_TOOLS if not (calendar or gmail) else
+                        MEMBER_TOOLS | (CALENDAR_TOOLS if calendar else {}) | (GMAIL_TOOLS if gmail else {}))
+    for calendar in (False, True) for gmail in (False, True)
+}
 
 
-def tools_for(role: str) -> dict:
-    return TOOLS if role == "owner" else MEMBER_TOOLS
+def tools_for(ctx: ToolContext) -> dict:
+    if ctx.role == "owner":
+        return TOOLS
+    return MEMBER_REGISTRIES[(ctx.calendar, ctx.gmail)]
 
 
 def _real(tools: dict) -> bool:
     """The production registries (not a test's fake world): only these may borrow MCP tools like web_fetch."""
-    return tools is TOOLS or tools is MEMBER_TOOLS
+    return tools is TOOLS or any(tools is registry for registry in MEMBER_REGISTRIES.values())
 # Tools that change real data need the owner's "yes" first. Value = optional check run before asking.
 WRITE_TOOLS = {"create_task": None, "create_event": validate_event}
 # Low-risk changes to the user's OWN Sidekick data: run immediately (undoable), logged as executed.
@@ -336,7 +348,7 @@ def decide(ctx: ToolContext, approve: bool, action_id: int | None = None, tools:
     `action_id` comes from a button: it must match the CURRENT proposal, so an old button can't approve
     a newer action. Two taps (or a retried request) race for claim(); only one wins.
     """
-    tools = tools_for(ctx.role) if tools is None else tools  # a member's approval runs a member's tool
+    tools = tools_for(ctx) if tools is None else tools  # a member's approval runs a member's tool
     pending = PENDING.claim(ctx.chat_id, action_id)
     if pending is None:
         return "That request was already handled or replaced."
@@ -367,8 +379,12 @@ def system_prompt(tools: dict | None = None, tz: str = OWNER_TIMEZONE) -> str:
     # Put "now" in the prompt so the model doesn't spend a whole request calling get_current_time.
     now = datetime.now(ZoneInfo(tz))
     tomorrow = (now + timedelta(days=1)).strftime("%A %Y-%m-%d")
-    no_google = ("\nThis user has not connected Google Calendar or Gmail: if asked about them, say so instead of "
-                 "guessing." if tools is not None and "list_events" not in tools else "")
+    missing = [] if tools is None else [service for service, tool in
+                                        (("Google Calendar", "list_events"), ("Gmail", "search_emails"))
+                                        if tool not in tools]
+    how = {"Google Calendar": "/connect links their Google Calendar", "Gmail": "/connect gmail adds Gmail (read-only)"}
+    no_google = (f"\nThis user has not connected {' or '.join(missing)}: if asked about it, say so instead of "
+                 f"guessing; {' and '.join(how[m] for m in missing)}." if missing else "")
     return (f"{SYSTEM_PROMPT}\nCurrent time: {now.strftime('%A %Y-%m-%d %H:%M')} ({tz}). "
             f"Tomorrow is {tomorrow}.{no_google}")
 
@@ -387,7 +403,7 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
     """The agent loop. `llm` (default: the model router) and `tools` are injectable so tests can
     swap in fakes without changing this function. `images`: photos the user attached.
     `history`: recent messages of this chat (short-term memory), oldest first."""
-    tools = tools_for(ctx.role) if tools is None else tools
+    tools = tools_for(ctx) if tools is None else tools
     llm = llm or default_router().complete
     trace = Trace()
     undo_id = None

@@ -38,6 +38,13 @@ OWNER_TIMEZONE = os.getenv("OWNER_TIMEZONE") or "America/Los_Angeles"
 # The owner's morning brief time (HH:MM, local) unless changed with /brieftime; empty = off. Members choose their own.
 DAILY_BRIEF_TIME = os.getenv("DAILY_BRIEF_TIME", "08:00")
 
+# Members connecting their own Google Calendar: a "Web application" OAuth client whose redirect URI is
+# https://<SIDEKICK_DOMAIN>/oauth/google/callback, and the key that encrypts their tokens in the database.
+GOOGLE_WEB_CLIENT_ID = os.getenv("GOOGLE_WEB_CLIENT_ID", "")
+GOOGLE_WEB_CLIENT_SECRET = os.getenv("GOOGLE_WEB_CLIENT_SECRET", "")
+SECRETS_KEY = os.getenv("SECRETS_KEY", "")
+SIDEKICK_DOMAIN = os.getenv("SIDEKICK_DOMAIN", "")
+
 # Fair use: AI requests a member may make per day (their local day). The owner has no limit.
 MEMBER_DAILY_LIMIT = int(os.getenv("MEMBER_DAILY_LIMIT") or 50)
 

@@ -1,4 +1,7 @@
-"""Gmail API, READ-ONLY: search and read the owner's mail. No send, no delete (scope: gmail.readonly)."""
+"""Gmail API, READ-ONLY: search and read the asking user's mail. No send, no delete (scope: gmail.readonly).
+
+The owner uses the server-level sign-in; members use the Gmail they connected with /connect gmail. Which one
+is decided by `ctx`, which the server fills in (the model can't pass it)."""
 import base64
 import html
 import re
@@ -14,16 +17,16 @@ def _headers(message: dict) -> dict:
     return {h["name"]: h["value"] for h in message.get("payload", {}).get("headers", [])}
 
 
-def search_emails(query: str = "is:unread newer_than:1d", max_results: int = 10) -> dict:
+def search_emails(query: str = "is:unread newer_than:1d", max_results: int = 10, *, ctx=None) -> dict:
     """query uses Gmail's own search syntax, exactly like the Gmail search box."""
-    data = google_request("GET", API, "Gmail", params={"q": query, "maxResults": min(max_results, 15)})
+    data = google_request("GET", API, "Gmail", ctx, params={"q": query, "maxResults": min(max_results, 15)})
     if "error" in data:
         return data
 
     emails = []
     for ref in data.get("messages", []):
         # One small request per message: headers + Gmail's short preview, not the full body.
-        msg = google_request("GET", f"{API}/{ref['id']}", "Gmail", params=[
+        msg = google_request("GET", f"{API}/{ref['id']}", "Gmail", ctx, params=[
             ("format", "metadata"), ("metadataHeaders", "From"),
             ("metadataHeaders", "Subject"), ("metadataHeaders", "Date"),
         ])
@@ -52,8 +55,8 @@ def _find_text(part: dict, mime: str) -> str:
     return ""
 
 
-def read_email(message_id: str) -> dict:
-    msg = google_request("GET", f"{API}/{message_id}", "Gmail", params={"format": "full"})
+def read_email(message_id: str, *, ctx=None) -> dict:
+    msg = google_request("GET", f"{API}/{message_id}", "Gmail", ctx, params={"format": "full"})
     if "error" in msg:
         return msg
     payload = msg.get("payload", {})

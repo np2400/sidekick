@@ -12,7 +12,7 @@
 </head>
 <body>
 <h1>Sidekick privacy policy</h1>
-<p><em>Last updated: October 24, 2026</em></p>
+<p><em>Last updated: October 25, 2026</em></p>
 
 <p>Sidekick is a personal AI assistant on Telegram, built and run by Neel Parekh. It is used by its owner
 and a few people the owner invites with a one-time link; there is no public sign-up.</p>
@@ -22,6 +22,15 @@ and a few people the owner invites with a one-time link; there is no public sign
   <li>Each user's reminders, tasks, recent messages and pending approvals are kept separately and only that
     user can see or change them through the bot.</li>
   <li>Invited users don't get access to the owner's Google Calendar, Gmail or other connected accounts.</li>
+  <li>Invited users can connect their own Google account. <code>/connect</code> asks Google only for calendar
+    access (read events, and create events you approve) plus your email address to show which account is connected.
+    <code>/connect gmail</code> also asks for read-only Gmail access: Sidekick searches and reads your email only
+    when you ask, and can never send, change or delete it. Emails you ask about are sent to the AI model writing
+    the answer (see "How it is used").</li>
+  <li>Your Google sign-in token is stored encrypted, with the key kept outside the database and its backups. The
+    owner runs the server, so this protects against a leaked database or backup, not against the server itself.
+    Send <code>/disconnect</code> to revoke access, or remove Sidekick at
+    <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
   <li>The owner runs the server, so stored data is technically within the owner's reach; Sidekick has no feature
     for reading another user's messages.</li>
 </ul>
@@ -31,8 +40,8 @@ and a few people the owner invites with a one-time link; there is no public sign
   <li><strong>Telegram messages</strong> you send to the Sidekick bot, and your Telegram user id.</li>
   <li><strong>Google Calendar</strong> (if connected): reads events when you ask about your schedule, and creates
     an event only after you approve it.</li>
-  <li><strong>Gmail</strong> (if connected): read-only. Sidekick searches and reads messages only when you ask.
-    It cannot send, change or delete email.</li>
+  <li><strong>Gmail</strong> (if connected; for invited users only with <code>/connect gmail</code>): read-only.
+    Sidekick searches and reads messages only when you ask. It cannot send, change or delete email.</li>
   <li><strong>Web search</strong>: when a question needs current information, the search query is sent to
     Tavily, a search service, which returns public web results.</li>
   <li><strong>Photos</strong> you send the bot: passed to an AI model that can read images (currently Google

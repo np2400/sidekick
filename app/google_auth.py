@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import httpx
 
 from app.config import DATA_DIR
+from app.vault import VaultError
 
 log = logging.getLogger("sidekick.google")
 CLIENT_FILE = DATA_DIR / "google_client_secret.json"  # identifies the app (from Google Cloud)
@@ -127,12 +128,21 @@ def get_access_token() -> str:
     return fresh["access_token"]
 
 
-def google_request(method: str, url: str, service: str, **kwargs) -> dict:
+def token_for(ctx=None) -> str:
+    """Whose Google account a request uses: the owner's server-level sign-in (this file), or the account a member
+    connected themselves (app/google_web.py). A member can never fall back to the owner's token."""
+    if ctx is None or ctx.role == "owner":
+        return get_access_token()
+    from app.google_web import access_token  # imported here: google_web imports GoogleAuthError from this module
+    return access_token(ctx.chat_id)
+
+
+def google_request(method: str, url: str, service: str, ctx=None, **kwargs) -> dict:
     """Shared by Calendar and Gmail: auth header, timeout, and errors the model can relay."""
     try:
-        token = get_access_token()  # refreshes behind the scenes when the 1-hour token expires
+        token = token_for(ctx)  # refreshes behind the scenes when the 1-hour token expires
         response = httpx.request(method, url, headers={"Authorization": f"Bearer {token}"}, timeout=15, **kwargs)
-    except GoogleAuthError as exc:
+    except (GoogleAuthError, VaultError) as exc:
         return {"error": str(exc)}
     except httpx.HTTPError as exc:
         log.error("%s network error: %s", service, type(exc).__name__)

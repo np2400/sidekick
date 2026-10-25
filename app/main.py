@@ -3,12 +3,15 @@ import logging
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from html import escape
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Header, HTTPException, Response
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from app import daily, db, memory, reminders, settings, users
+from app import daily, db, google_web, memory, reminders, settings, users
+from app.vault import VaultError
 from app.agent import PENDING, decide, handle_approval, run_agent
 from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
 from app.config import MEMBER_DAILY_LIMIT, SCHEDULER_ENABLED, TELEGRAM_OWNER_ID, TELEGRAM_WEBHOOK_SECRET
@@ -57,6 +60,34 @@ def health(response: Response) -> dict[str, str]:
 @app.post("/echo")
 def echo(payload: EchoRequest) -> dict[str, str]:
     return {"reply": f"You said: {payload.text}"}
+
+
+@app.get("/oauth/google/callback", response_class=HTMLResponse)
+def google_callback(state: str = "", code: str = "", error: str = "") -> HTMLResponse:
+    """Google sends the member's browser here after they sign in (step 3 in app/google_web.py)."""
+    if error or not (state and code):
+        return page("Not connected", "Google sign-in was cancelled. Send /connect in Telegram to try again.", 400)
+    try:
+        chat_id, email, gmail = google_web.finish(state, code)
+    except google_web.ConnectError as exc:
+        return page("Not connected", str(exc), 400)
+    except VaultError:
+        log.exception("Can't store a Google token")
+        return page("Not connected", "Sidekick can't store the connection safely right now. Try again later.", 500)
+    what = "Google Calendar and Gmail (read-only)" if gmail else "Google Calendar"
+    log.info("Google connected for %s (gmail: %s)", chat_id, gmail)
+    try_it = "\"any important emails today?\"" if gmail else "\"what's on my calendar tomorrow?\""
+    send_message(chat_id, f"✅ {what} connected{f' ({email})' if email else ''}. Try: {try_it} "
+                          "Send /disconnect to remove access.")
+    return page("Connected ✅", f"Your {what} is connected to Sidekick. You can close this page and go back to "
+                               "Telegram.")
+
+
+def page(title: str, text: str, status: int = 200) -> HTMLResponse:
+    return HTMLResponse(f"<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,"
+                        f"initial-scale=1'><title>Sidekick</title><body style='font:18px/1.5 system-ui;max-width:"
+                        f"32rem;margin:3rem auto;padding:0 1rem'><h1>{escape(title)}</h1><p>{escape(text)}</p>",
+                        status_code=status)
 
 
 @app.post("/telegram/webhook")
@@ -143,6 +174,10 @@ def telegram_webhook(
         reply = WELCOME
     elif command == "/invite":
         reply = invite_text(int(sender_id)) if role == "owner" else "Only the owner can invite people."
+    elif command in ("/connect", "/connect gmail"):
+        reply = connect_text(ctx, gmail=command == "/connect gmail")
+    elif command == "/disconnect":
+        reply = disconnect_text(ctx)
     else:
         reply = handle_approval(ctx, text)
         if reply is not None:
@@ -193,7 +228,8 @@ PHOTO_PROMPT = ("What's in this photo? If it shows dates, times or events, list 
 WELCOME = ("I'm Sidekick, an assistant you text. Try: \"remind me to call Mom tomorrow at 10\", \"add a task to "
            "buy milk\", \"what's the weather this weekend?\", or send a photo with a question in the caption. "
            "/reminders lists your reminders; /forget clears our recent conversation; /timezone and /brieftime set "
-           "your timezone and an optional morning summary.")
+           "your timezone and an optional morning summary; /connect links your own Google Calendar (and /connect "
+           "gmail your email, read-only).")
 
 
 def role_of(sender_id: str) -> str | None:
@@ -207,8 +243,43 @@ def role_of(sender_id: str) -> str | None:
 
 def context(chat_id: int, sender_id: str, role: str) -> ToolContext:
     """Who this request is for. Built by the server from Telegram's sender, never from anything the model says."""
+    google = google_web.connection(chat_id) if role != "owner" else None  # the owner's Google is server-level
     return ToolContext(chat_id=chat_id, user_id="owner" if role == "owner" else sender_id, role=role,
-                       tz=settings.timezone_of(chat_id))
+                       tz=settings.timezone_of(chat_id),
+                       calendar=bool(google and google["calendar"]), gmail=bool(google and google["gmail"]))
+
+
+def connect_text(ctx: ToolContext, gmail: bool = False) -> str:
+    """/connect (Calendar) or /connect gmail (Calendar + Gmail, read-only): a personal Google sign-in link."""
+    if ctx.role == "owner":
+        return "Your Google account is connected through the server setup (python -m app.google_auth)."
+    if not google_web.configured():
+        return "Connecting Google isn't set up on this Sidekick yet."
+    google = google_web.connection(ctx.chat_id)
+    account = f" ({google['email']})" if google and google["email"] else ""
+    if google and google["gmail"]:
+        return f"Your Google Calendar and Gmail are already connected{account}. /disconnect removes access."
+    if google and google["calendar"] and not gmail:
+        return (f"Your Google Calendar is already connected{account}. Send /connect gmail to also let me read your "
+                "email, or /disconnect to remove access.")
+    if gmail:
+        what = ("Connect your Google Calendar and Gmail. Gmail is read-only: I can search and read your email to "
+                "answer you, never send or delete. Emails you ask about are sent to the AI models I use (Groq, "
+                "Google Gemini) to write the answer.")
+    else:
+        what = "Connect your Google Calendar (calendar only: no email, no files). Send /connect gmail to add email."
+    return (f"{what} This link is just for you and works for {google_web.STATE_MINUTES} minutes:\n"
+            f"{google_web.start(ctx.chat_id, gmail=gmail)}\n\n"
+            "Google will say it hasn't verified this app: tap Advanced, then Go to Sidekick. If Google says this "
+            "browser isn't allowed, open the link in Safari or Chrome.")
+
+
+def disconnect_text(ctx: ToolContext) -> str:
+    if ctx.role == "owner":
+        return "Your Google account is managed on the server, not with /disconnect."
+    if google_web.disconnect(ctx.chat_id):
+        return "Google disconnected, and Sidekick's access was revoked at Google."
+    return "Your Google account isn't connected."
 
 
 def join(text: str, telegram_id: int, name: str) -> str:

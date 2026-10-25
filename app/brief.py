@@ -15,6 +15,7 @@ from app.gcal import list_events
 from app.gmail import search_emails
 from app.llm.router import AllProvidersFailed, default_router
 from app.llm.types import Message
+from app.trace import ToolContext
 
 log = logging.getLogger("sidekick.brief")
 TRIGGERS = {"/brief", "brief", "brief me", "morning brief"}
@@ -43,14 +44,16 @@ def gather(days_ahead: int = 0, ctx=None) -> dict:
         "tasks": _tasks("today | overdue" if days_ahead == 0 else "tomorrow | overdue", ctx),
         "reminders": reminders.reminders_between(ctx.chat_id, *_day_bounds(when)) if ctx else [],
     }
-    if ctx is None or ctx.role == "owner":  # Calendar and Gmail are the owner's accounts
-        facts["events"] = list_events(f"{day}T00:00:00", f"{day}T23:59:59")
-        facts["unread_email_last_24h"] = search_emails("is:unread newer_than:1d -in:spam", max_results=15)
+    owner = ctx is None or ctx.role == "owner"
+    if owner or ctx.calendar:  # the owner's calendar, or the member's own connected one (never the owner's)
+        facts["events"] = list_events(f"{day}T00:00:00", f"{day}T23:59:59", ctx=ctx)
+    if owner or ctx.gmail:  # the owner's Gmail, or the member's own connected one
+        facts["unread_email_last_24h"] = search_emails("is:unread newer_than:1d -in:spam", max_results=15, ctx=ctx)
     return facts
 
 
 def _tasks(query: str, ctx) -> dict:
-    tool = tools_for(ctx.role if ctx else "owner")["list_tasks"]  # members: their own built-in list
+    tool = tools_for(ctx or ToolContext(chat_id=0))["list_tasks"]  # members: their own built-in list
     if "ctx" not in inspect.signature(tool).parameters:
         return tool(query)  # Todoist: one account, no need to know whose
     return tool(query, ctx=ctx) if ctx else {"error": "no chat context for the built-in task list"}
@@ -70,7 +73,7 @@ def plain_brief(facts: dict) -> str:
         lines.append(f"• Reminder {r['at'].split(', ')[-1]}: {r['text']}")
     for t in facts["tasks"].get("tasks", []):
         lines.append(f"• Task: {t['content']}" + (f" ({t['due']})" if t.get("due") else ""))
-    if "unread_email_last_24h" in facts:  # owner only
+    if "unread_email_last_24h" in facts:  # owner, or a member who connected Gmail
         lines.append(f"• {facts['unread_email_last_24h'].get('count', 0)} unread emails in the last day")
     return "\n".join(lines)
 

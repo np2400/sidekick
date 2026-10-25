@@ -19,6 +19,8 @@ class ToolContext:
     user_id: str = "owner"
     role: str = "owner"  # owner | member: decides which tools exist for this request
     tz: str = OWNER_TIMEZONE  # the user's timezone: "9am" means 9am where they are
+    calendar: bool = False    # a member who connected their own Google Calendar (/connect)
+    gmail: bool = False       # ...and their own Gmail, read-only (/connect gmail)
 
 
 @dataclass
