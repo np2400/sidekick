@@ -73,6 +73,20 @@ def download_photo(sizes: list[dict]) -> Image | None:
     return Image(mime="image/jpeg", data=response.content)  # Telegram stores photos as JPEG
 
 
+def send_document(chat_id: int, filename: str, data: bytes, caption: str = "") -> bool:
+    """Send a file (e.g. a /export) as a Telegram document. Multipart upload, not JSON."""
+    url = f"{API}/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+    try:
+        result = httpx.post(url, data={"chat_id": chat_id, "caption": caption},
+                            files={"document": (filename, data, "application/json")}, timeout=30).json()
+    except httpx.HTTPError as exc:
+        log.error("sendDocument failed: %s", redact(str(exc)))
+        return False
+    if not result.get("ok"):
+        log.error("sendDocument failed: %s", result.get("description"))
+    return bool(result.get("ok"))
+
+
 def approval_buttons(action_id: int) -> list[tuple[str, str]]:
     return [("✅ Yes", f"approve:{action_id}"), ("❌ No", f"reject:{action_id}")]
 

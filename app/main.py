@@ -1,4 +1,5 @@
 """Sidekick: local API + Telegram webhook + model-agnostic agent (Gemini + Groq via the router)."""
+import json
 import logging
 import secrets
 from contextlib import asynccontextmanager
@@ -10,7 +11,7 @@ from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from app import daily, db, google_web, memory, reminders, settings, users
+from app import account, daily, db, google_web, memory, reminders, settings, users
 from app.vault import VaultError
 from app.agent import PENDING, decide, handle_approval, run_agent
 from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
@@ -18,7 +19,7 @@ from app.config import MEMBER_DAILY_LIMIT, SCHEDULER_ENABLED, TELEGRAM_OWNER_ID,
 from app.db.store import first_time_seen, recent_actions, save_trace
 from app.logging_setup import RequestIdMiddleware, setup_logging
 from app.telegram import (answer_button, approval_buttons, bot_username, download_photo, remove_buttons,
-                          send_message)
+                          send_document, send_message)
 from app.trace import ToolContext
 
 setup_logging()  # timestamp + request id on every line; LOG_LEVEL=DEBUG shows content (laptop only)
@@ -178,6 +179,14 @@ def telegram_webhook(
         reply = connect_text(ctx, gmail=command == "/connect gmail")
     elif command == "/disconnect":
         reply = disconnect_text(ctx)
+    elif command == "/help":
+        reply = HELP + (OWNER_HELP if role == "owner" else "")
+    elif command == "/export":
+        reply = export_reply(ctx)
+    elif command.startswith("/delete_me"):
+        reply = delete_me_reply(ctx, confirmed=command == "/delete_me confirm")
+    elif command == "/users" or command.startswith("/remove"):
+        reply = admin_reply(command, text) if role == "owner" else "Only the owner can manage members."
     else:
         reply = handle_approval(ctx, text)
         if reply is not None:
@@ -191,6 +200,60 @@ def telegram_webhook(
 
 
 LIMIT_REPLY = f"You've reached today's limit of {MEMBER_DAILY_LIMIT} messages. It resets at midnight."
+
+HELP = ("Just write to me, or send a photo with a question in the caption. Commands:\n"
+        "/brief - today's plan  ·  /reminders - upcoming reminders  ·  /history - what I did recently\n"
+        "/timezone, /brieftime - your timezone and morning summary\n"
+        "/connect, /connect gmail, /disconnect - your Google Calendar and Gmail (read-only)\n"
+        "/forget - clear our recent conversation  ·  /export - all your data as a file  ·  /delete_me - erase it")
+OWNER_HELP = "\nOwner: /invite - invite link  ·  /users - members  ·  /remove NAME [delete] - end access"
+
+
+def export_reply(ctx: ToolContext) -> str:
+    """/export: a JSON file of everything stored about this person (the 'right to access')."""
+    data = json.dumps(account.export_data(ctx.chat_id), indent=2, ensure_ascii=False).encode()
+    sent = send_document(ctx.chat_id, f"sidekick-export-{datetime.now(timezone.utc):%Y-%m-%d}.json", data,
+                         caption="Everything Sidekick has stored about you.")
+    return "That's all of it. /delete_me erases it." if sent else "Sorry, I couldn't send the file. Try again later."
+
+
+def delete_me_reply(ctx: ToolContext, confirmed: bool) -> str:
+    """/delete_me: erase everything about this person (the 'right to erasure'), after an explicit confirm."""
+    if not confirmed:
+        leaving = "" if ctx.role == "owner" else " and removes you from Sidekick"
+        return ("This permanently deletes your reminders, tasks, history, memory, settings and Google connection"
+                f"{leaving}. Backups are overwritten within 7 days. To go ahead, send: /delete_me confirm")
+    rows = account.delete_everything(ctx.chat_id)
+    return f"Done: everything about you is deleted ({rows} records)." + (
+        "" if ctx.role == "owner" else " To come back, you'd need a new invite.")
+
+
+def admin_reply(command: str, text: str) -> str:
+    """/users and /remove (owner only): who's here and how active, never what anyone wrote."""
+    if command == "/users":
+        members = account.members_overview()
+        if not members:
+            return "No members yet. /invite creates an invite link."
+        lines = [f"{m['name'] or 'Unnamed'} ({m['telegram_id']}) - {m['status']}, joined {m['joined_at'][:10]}, "
+                 f"last active {(m['last_active'] or 'never')[:10]}, {m['requests_7d']} requests in 7 days"
+                 + ("" if not (m["calendar"] or m["gmail"]) else
+                    f", connected: {', '.join(n for n in ('calendar', 'gmail') if m[n])}") for m in members]
+        return "Members:\n" + "\n".join(lines)
+    parts = text.split()
+    wipe = len(parts) > 2 and parts[-1].lower() == "delete"
+    who = " ".join(parts[1:-1] if wipe else parts[1:])
+    if not who:
+        return "Use /remove NAME, or /remove NAME delete to also erase their data."
+    matches = account.find_member(who)
+    if len(matches) != 1:
+        found = ", ".join(f"{m['name']} ({m['telegram_id']})" for m in matches)
+        return f"More than one match: {found}. Use the number." if matches else f"No active member called {who}."
+    member = matches[0]
+    account.remove_member(member["telegram_id"])
+    if wipe:
+        account.delete_everything(member["telegram_id"])
+    return (f"Removed {member['name']}: no more access, reminders stopped, Google disconnected"
+            + (", and all their data deleted." if wipe else ". Their data stays until deleted."))
 
 
 def over_limit(ctx: ToolContext) -> bool:
