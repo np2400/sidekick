@@ -185,12 +185,26 @@ def test_disconnect_revokes_at_google_and_deletes_the_token(google):
     assert google_web.connection(DAD) is None and google_web.disconnect(DAD) is False
 
 
-def test_connect_command_replies(google):
+def test_connect_sends_a_button_and_a_short_guide(google):
     dad = ToolContext(chat_id=DAD, user_id="222", role="member")
-    assert "accounts.google.com" in main.connect_text(dad) and "Advanced" in main.connect_text(dad)
+    guide, buttons = main.connect_reply(dad)
+    assert "Advanced" in guide and "Tick the box" in guide and "accounts.google.com" not in guide  # no raw URL
+    [(label, link)] = buttons
+    assert label == "Connect Google Calendar" and link.startswith("https://accounts.google.com/")
+    assert main.connect_reply(dad, gmail=True)[1][0][0] == "Connect Google Calendar + Gmail"
+
     connect(DAD)
-    assert "already connected (dad@gmail.com)" in main.connect_text(dad)
-    assert "server setup" in main.connect_text(ToolContext(chat_id=OWNER))
+    assert "already connected (dad@gmail.com)" in main.connect_reply(dad)[0]
+    assert main.connect_reply(ToolContext(chat_id=OWNER))[1] is None
+
+
+def test_link_buttons_open_a_page_and_other_buttons_call_back(monkeypatch):
+    from app import telegram
+    sent = {}
+    monkeypatch.setattr(telegram, "call", lambda method, payload: sent.update(payload) or {"ok": True})
+    telegram.send_message(1, "hi", buttons=[("Connect", "https://accounts.google.com/x"), ("✅ Yes", "approve:3")])
+    assert sent["reply_markup"]["inline_keyboard"][0] == [
+        {"text": "Connect", "url": "https://accounts.google.com/x"}, {"text": "✅ Yes", "callback_data": "approve:3"}]
 
 
 # --- Gmail, read-only, only if the member opts in -------------------------------------

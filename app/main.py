@@ -176,7 +176,7 @@ def telegram_webhook(
     elif command == "/invite":
         reply = invite_text(int(sender_id)) if role == "owner" else "Only the owner can invite people."
     elif command in ("/connect", "/connect gmail"):
-        reply = connect_text(ctx, gmail=command == "/connect gmail")
+        reply, buttons = connect_reply(ctx, gmail=command == "/connect gmail")
     elif command == "/disconnect":
         reply = disconnect_text(ctx)
     elif command == "/help":
@@ -312,29 +312,34 @@ def context(chat_id: int, sender_id: str, role: str) -> ToolContext:
                        calendar=bool(google and google["calendar"]), gmail=bool(google and google["gmail"]))
 
 
-def connect_text(ctx: ToolContext, gmail: bool = False) -> str:
-    """/connect (Calendar) or /connect gmail (Calendar + Gmail, read-only): a personal Google sign-in link."""
+def connect_reply(ctx: ToolContext, gmail: bool = False) -> tuple[str, list | None]:
+    """/connect (Calendar) or /connect gmail (Calendar + Gmail, read-only): a sign-in button and a short guide."""
     if ctx.role == "owner":
-        return "Your Google account is connected through the server setup (python -m app.google_auth)."
+        return "Your Google account is connected through the server setup (python -m app.google_auth).", None
     if not google_web.configured():
-        return "Connecting Google isn't set up on this Sidekick yet."
+        return "Connecting Google isn't set up on this Sidekick yet.", None
     google = google_web.connection(ctx.chat_id)
     account = f" ({google['email']})" if google and google["email"] else ""
     if google and google["gmail"]:
-        return f"Your Google Calendar and Gmail are already connected{account}. /disconnect removes access."
+        return f"Your Google Calendar and Gmail are already connected{account}. /disconnect removes access.", None
     if google and google["calendar"] and not gmail:
         return (f"Your Google Calendar is already connected{account}. Send /connect gmail to also let me read your "
-                "email, or /disconnect to remove access.")
+                "email, or /disconnect to remove access."), None
     if gmail:
-        what = ("Connect your Google Calendar and Gmail. Gmail is read-only: I can search and read your email to "
-                "answer you, never send or delete. Emails you ask about are sent to the AI models I use (Groq, "
-                "Google Gemini) to write the answer.")
+        what = ("Gmail is read-only: I can search and read your email to answer you, never send or delete. Emails "
+                "you ask about are sent to the AI models I use (Groq, Google Gemini) to write the answer.")
+        label, boxes = "Connect Google Calendar + Gmail", "both boxes"
     else:
-        what = "Connect your Google Calendar (calendar only: no email, no files). Send /connect gmail to add email."
-    return (f"{what} This link is just for you and works for {google_web.STATE_MINUTES} minutes:\n"
-            f"{google_web.start(ctx.chat_id, gmail=gmail)}\n\n"
-            "Google will say it hasn't verified this app: tap Advanced, then Go to Sidekick. If Google says this "
-            "browser isn't allowed, open the link in Safari or Chrome.")
+        what = "Calendar only: no email, no files. (Send /connect gmail if you also want email.)"
+        label, boxes = "Connect Google Calendar", "the box"
+    guide = (f"{what}\n\nTap the button below, then on Google's screens:\n"
+             "1. Pick your Google account.\n"
+             "2. \"Google hasn't verified this app\": tap Advanced, then Go to Sidekick. (That's this assistant; "
+             "Google shows this for personal apps.)\n"
+             f"3. Tick {boxes}, then Continue.\n\n"
+             f"The button works once, for {google_web.STATE_MINUTES} minutes. If Google says this browser isn't "
+             "allowed, open it in Safari or Chrome.")
+    return guide, [(label, google_web.start(ctx.chat_id, gmail=gmail))]
 
 
 def disconnect_text(ctx: ToolContext) -> str:

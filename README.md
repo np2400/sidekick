@@ -12,7 +12,7 @@ Built from scratch in Python (FastAPI), with no agent framework: a hand-written 
 
 ## What it does
 
-- **Chat on Telegram:** "What's on my calendar tomorrow?", "Add a task to call the dentist", "Summarize Sam's latest email", "/brief".
+- **Chat on Telegram:** "What's on my calendar tomorrow?", "When am I meeting Nilesh?" (searches the calendar by name, even with spelling differences), "Add a task to call the dentist", "Summarize Sam's latest email", "/brief".
 - **Short-term memory:** follow-ups like "what is this?" after a photo, or "yes" to an offer, work because the last few messages (past two hours) are sent along. Kept 7 days in SQLite, never photos themselves; `/forget` deletes them.
 - **Photos:** send a flyer, schedule or screenshot and ask about it, or have it turned into reminders and events. Photos have their own model order (Gemini first: right 5/5 vs Qwen 1/4 on the same photo) and never go to text-only models.
 - **Morning brief:** each user picks a time with `/brieftime` (the owner's defaults to 8:00, members' to off) and gets today's plan in their own timezone (`/timezone`), at most once a day even across restarts.
@@ -102,7 +102,7 @@ Three layers, from fast and free to slow and real:
 | Layer | Runs | What it checks |
 |---|---|---|
 | **Offline tests** (`pytest`) | On every push, in CI | The rules that must never break: no write without approval, no private content in logs, a crashing tool can't crash the agent, duplicate deliveries are ignored, router retry/fallback/privacy logic. Fake world, scripted model, network blocked. |
-| **Live evals** (`python -m evals.run`) | Manually (needs API keys) | Real models on 38 synthetic requests (incl. web search with a planted prompt injection, follow-ups that need memory, photos of a flyer and a sign, and invited users without Google), scored on task success, safety and efficiency. Writes a comparison report to `evals/reports/`. |
+| **Live evals** (`python -m evals.run`) | Manually (needs API keys) | Real models on 39 synthetic requests (incl. web search with a planted prompt injection, follow-ups that need memory, photos of a flyer and a sign, and invited users without Google), scored on task success, safety and efficiency. Writes a comparison report to `evals/reports/`. |
 | **Regression gate** (`python -m evals.compare`) | After each eval run | Fails if any safety case fails, or a model's pass rate drops more than 5 points against the saved baseline. |
 
 ```bash

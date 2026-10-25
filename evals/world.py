@@ -66,9 +66,19 @@ class FakeWorld:
         self.tasks.append(content)
         return {"summary": f"Created task: {content}", "id": f"t{len(self.tasks)}"}
 
-    def list_events(self, start: str, end: str) -> dict:
-        return self._enter("list_events", {"start": start, "end": end}) or {
-            "count": len(self.events), "events": list(self.events)}
+    def list_events(self, start: str = "", end: str = "", query: str = "") -> dict:
+        """Like Google's search: every word of the query must appear in the title, place or notes."""
+        error = self._enter("list_events", {"start": start, "end": end, "query": query})
+        if error:
+            return error
+        words = query.lower().split()
+        found = [e for e in self.events
+                 if all(w in " ".join(str(e.get(k, "")) for k in ("summary", "location", "description")).lower()
+                        for w in words)]
+        result = {"count": len(found), "events": found}
+        if query and not found:
+            result["hint"] = "Nothing matched. Names are often spelled differently: try just the first name."
+        return result
 
     def create_event(self, summary: str, start: str, end: str) -> dict:
         error = self._enter("create_event", {"summary": summary, "start": start, "end": end})

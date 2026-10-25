@@ -4,7 +4,7 @@ The owner uses the server-level sign-in; members use the calendar they connected
 decided by `ctx`, which the server fills in (the model can't pass it).
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.config import OWNER_TIMEZONE
@@ -28,27 +28,43 @@ def _request(method: str, ctx, **kwargs) -> dict:
     return google_request(method, API, "Google Calendar", ctx, **kwargs)
 
 
-def list_events(start: str, end: str, *, ctx=None) -> dict:
+SEARCH_DAYS = 120   # "when am I meeting Nilesh?" without dates: look ~4 months ahead
+MAX_DESCRIPTION = 200  # event notes can be long; a short excerpt is enough and keeps model calls small
+
+
+def list_events(start: str = "", end: str = "", query: str = "", *, ctx=None) -> dict:
+    """Events between start and end, and/or matching `query` (Google searches titles, places, descriptions)."""
     tz = _tz(ctx)
+    if not (start and end) and not query:
+        return {"error": "Give start and end, or a query to search for (a person, place or topic)."}
     try:
-        time_min, time_max = _parse(start, tz), _parse(end, tz)
+        time_min = _parse(start, tz) if start else datetime.now(ZoneInfo(tz))
+        time_max = _parse(end, tz) if end else time_min + timedelta(days=SEARCH_DAYS)
     except ValueError:
         return {"error": "start and end must be ISO datetimes like 2026-10-16T09:00:00."}
-    data = _request("GET", ctx, params={
-        "timeMin": time_min.isoformat(), "timeMax": time_max.isoformat(),
-        "singleEvents": "true", "orderBy": "startTime", "maxResults": 25,
-    })
+    params = {"timeMin": time_min.isoformat(), "timeMax": time_max.isoformat(),
+              "singleEvents": "true", "orderBy": "startTime", "maxResults": 25}
+    if query:
+        params["q"] = query
+    data = _request("GET", ctx, params=params)
     if "error" in data:
         return data
-    events = [
-        {
+    events = []
+    for e in data.get("items", []):
+        event = {
             "summary": e.get("summary", "(no title)"),
             "start": e["start"].get("dateTime", e["start"].get("date")),
             "end": e["end"].get("dateTime", e["end"].get("date")),
         }
-        for e in data.get("items", [])
-    ]
-    return {"timezone": tz, "count": len(events), "events": events}
+        if e.get("location"):  # the exact text, so the model copies it instead of retyping from memory
+            event["location"] = e["location"]
+        if e.get("description"):
+            event["description"] = e["description"][:MAX_DESCRIPTION]
+        events.append(event)
+    result = {"timezone": tz, "count": len(events), "events": events}
+    if query and not events:
+        result["hint"] = "Nothing matched. Names are often spelled differently: try just the first name."
+    return result
 
 
 def validate_event(summary: str, start: str, end: str) -> str | None:

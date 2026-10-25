@@ -29,11 +29,13 @@ def call(method: str, payload: dict) -> dict:
 
 
 def send_message(chat_id: int, text: str, buttons: list[tuple[str, str]] | None = None) -> dict:
-    """buttons: [(label, callback_data)] shown in one row under the message (Telegram inline keyboard)."""
+    """buttons: [(label, callback_data or https:// link)] shown in one row under the message (inline keyboard).
+    A link becomes a button that opens the page, instead of a long URL in the text."""
     payload = {"chat_id": chat_id, "text": text}
     if buttons:
-        payload["reply_markup"] = {"inline_keyboard": [[{"text": label, "callback_data": data}
-                                                        for label, data in buttons]]}
+        payload["reply_markup"] = {"inline_keyboard": [[
+            {"text": label, "url": data} if data.startswith("https://") else {"text": label, "callback_data": data}
+            for label, data in buttons]]}
     result = call("sendMessage", payload)
     if not result.get("ok"):
         log.error("sendMessage failed: %s", result.get("description"))

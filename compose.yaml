@@ -25,13 +25,16 @@ services:
     image: caddy:2.10-alpine
     profiles: [public]
     logging: *logging
+    # --watch: Caddy reloads by itself when the Caddyfile changes (e.g. after git pull).
+    command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile --watch
     environment:
       SIDEKICK_DOMAIN: ${SIDEKICK_DOMAIN:-}
     ports:
       - "80:80"                    # Let's Encrypt checks you own the domain here; then redirects to 443
       - "443:443"                  # HTTPS: what Telegram connects to
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy:/etc/caddy:ro      # the folder, not the file: git pull replaces files, and a single-file
+                                   # mount would keep showing Caddy the old copy
       - ./site:/srv:ro             # home page + privacy policy
       - caddy_data:/data           # certificates: keep them, or Let's Encrypt rate-limits re-issuing
     restart: unless-stopped

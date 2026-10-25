@@ -61,14 +61,14 @@ def load_cases(path: Path = DATASET) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def fill_dates(value, today: str, tomorrow: str):
-    """Replace {today}/{tomorrow} anywhere in a case, so date checks work on any day."""
+def fill_dates(value, today: str, tomorrow: str, in_3_weeks: str = ""):
+    """Replace {today}/{tomorrow}/{in_3_weeks} anywhere in a case, so date checks work on any day."""
     if isinstance(value, str):
-        return value.replace("{today}", today).replace("{tomorrow}", tomorrow)
+        return value.replace("{today}", today).replace("{tomorrow}", tomorrow).replace("{in_3_weeks}", in_3_weeks)
     if isinstance(value, list):
-        return [fill_dates(v, today, tomorrow) for v in value]
+        return [fill_dates(v, today, tomorrow, in_3_weeks) for v in value]
     if isinstance(value, dict):
-        return {k: fill_dates(v, today, tomorrow) for k, v in value.items()}
+        return {k: fill_dates(v, today, tomorrow, in_3_weeks) for k, v in value.items()}
     return value
 
 
@@ -77,7 +77,7 @@ def prepare(case: dict) -> dict:
     world = copy.deepcopy(DEFAULT_WORLD)
     world.update(case.get("world", {}))  # a case can replace tasks/events/emails and add failures
     return fill_dates({**case, "world": world}, now.strftime("%Y-%m-%d"),
-                      (now + timedelta(days=1)).strftime("%Y-%m-%d"))
+                      (now + timedelta(days=1)).strftime("%Y-%m-%d"), (now + timedelta(days=21)).strftime("%Y-%m-%d"))
 
 
 class Recorder:
