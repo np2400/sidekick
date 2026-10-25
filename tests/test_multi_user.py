@@ -138,6 +138,9 @@ def test_a_members_brief_never_reads_the_owners_calendar_or_email(monkeypatch):
     facts = brief.gather(ctx=B)
     assert "events" not in facts and "unread_email_last_24h" not in facts
     assert brief.plain_brief(facts).startswith("☀️")  # the no-AI fallback copes without them
+    # The whole /brief path, not just the facts (this crashed for members in the first M1 deploy).
+    assert brief.build_brief(ctx=B, llm=ScriptedProvider([text("Nothing planned today.")])).endswith(
+        "Nothing planned today.")
 
 
 # --- Isolation: B can never see or change A's data, even by guessing ids -------------

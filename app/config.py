@@ -35,8 +35,11 @@ SCHEDULER_ENABLED = os.getenv("SIDEKICK_SCHEDULER", "1") != "0"
 
 OWNER_TIMEZONE = os.getenv("OWNER_TIMEZONE") or "America/Los_Angeles"
 
-# Morning brief sent automatically at this local time (HH:MM). Set DAILY_BRIEF_TIME= (empty) to turn it off.
+# The owner's morning brief time (HH:MM, local) unless changed with /brieftime; empty = off. Members choose their own.
 DAILY_BRIEF_TIME = os.getenv("DAILY_BRIEF_TIME", "08:00")
+
+# Fair use: AI requests a member may make per day (their local day). The owner has no limit.
+MEMBER_DAILY_LIMIT = int(os.getenv("MEMBER_DAILY_LIMIT") or 50)
 
 # Everything that must survive restarts and redeploys lives in one folder: the database and the Google
 # token files. Locally that's the project folder; in Docker it's /data, a volume outside the container.

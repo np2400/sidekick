@@ -36,6 +36,11 @@ def redeem(code: str, telegram_id: int, name: str) -> bool:
     return claimed
 
 
+def active_members() -> list[int]:
+    with db.connect() as conn:
+        return [r[0] for r in conn.execute("SELECT telegram_id FROM users WHERE status = 'active'")]
+
+
 def is_member(telegram_id: int) -> bool:
     with db.connect() as conn:
         return conn.execute("SELECT 1 FROM users WHERE telegram_id = ? AND status = 'active'",

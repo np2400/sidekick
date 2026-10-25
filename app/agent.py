@@ -27,7 +27,7 @@ TOOL_BUDGET = {"web_search": 2, "web_fetch": 1}
 SYSTEM_PROMPT = (
     "You are Sidekick, a concise personal assistant chatting over Telegram. "
     "Use a tool whenever it gives a more accurate answer than guessing. Keep replies short and in plain text (no Markdown). "
-    f"The owner's timezone is {OWNER_TIMEZONE}; the current time is given below. "
+    "The user's timezone and current time are given below; times they mention are in that timezone. "
     "To check availability, list_events for that window. "
     "For create_task and create_event, the tool call IS the proposal: call it right away instead of asking "
     "in text first. The system holds it until the user approves; then show exactly what will be created and "
@@ -363,13 +363,13 @@ def decide(ctx: ToolContext, approve: bool, action_id: int | None = None, tools:
 SENSITIVE_TOOLS = {"search_emails", "read_email"}  # their results are private content -> privacy routing
 
 
-def system_prompt(tools: dict | None = None) -> str:
+def system_prompt(tools: dict | None = None, tz: str = OWNER_TIMEZONE) -> str:
     # Put "now" in the prompt so the model doesn't spend a whole request calling get_current_time.
-    now = datetime.now(ZoneInfo(OWNER_TIMEZONE))
+    now = datetime.now(ZoneInfo(tz))
     tomorrow = (now + timedelta(days=1)).strftime("%A %Y-%m-%d")
     no_google = ("\nThis user has not connected Google Calendar or Gmail: if asked about them, say so instead of "
                  "guessing." if tools is not None and "list_events" not in tools else "")
-    return (f"{SYSTEM_PROMPT}\nCurrent time: {now.strftime('%A %Y-%m-%d %H:%M')} ({OWNER_TIMEZONE}). "
+    return (f"{SYSTEM_PROMPT}\nCurrent time: {now.strftime('%A %Y-%m-%d %H:%M')} ({tz}). "
             f"Tomorrow is {tomorrow}.{no_google}")
 
 
@@ -400,7 +400,7 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
 
     for step in range(1, MAX_STEPS + 1):
         try:
-            response = llm(messages, specs, system_prompt(tools), sensitive=sensitive)
+            response = llm(messages, specs, system_prompt(tools, ctx.tz), sensitive=sensitive)
         except AllProvidersFailed as exc:
             trace.record_failures(exc.attempts)
             if exc.privacy_blocked:

@@ -74,7 +74,7 @@ def test_action_log_records_what_happened_without_tool_arguments(world):
 def test_history_command_formats_recent_actions(world):
     stage(world)
     decide(CTX, approve=False, tools=world.tools())
-    out = main.history_text(1)
+    out = main.history_text(ToolContext(chat_id=1))
     assert out.startswith("Recent actions:") and "rejected create_task" in out
 
 

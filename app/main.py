@@ -8,10 +8,10 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from app import daily, db, memory, reminders, users
+from app import daily, db, memory, reminders, settings, users
 from app.agent import PENDING, decide, handle_approval, run_agent
 from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
-from app.config import OWNER_TIMEZONE, SCHEDULER_ENABLED, TELEGRAM_OWNER_ID, TELEGRAM_WEBHOOK_SECRET
+from app.config import MEMBER_DAILY_LIMIT, SCHEDULER_ENABLED, TELEGRAM_OWNER_ID, TELEGRAM_WEBHOOK_SECRET
 from app.db.store import first_time_seen, recent_actions, save_trace
 from app.logging_setup import RequestIdMiddleware, setup_logging
 from app.telegram import (answer_button, approval_buttons, bot_username, download_photo, remove_buttons,
@@ -115,18 +115,25 @@ def telegram_webhook(
     # 6. Think: otherwise the model (via the router) decides whether to answer directly or call a Python tool.
     buttons = None
     if photos:
-        image = download_photo(photos)
-        if image is None:
+        if over_limit(ctx):
+            reply = LIMIT_REPLY
+        elif (image := download_photo(photos)) is None:
             reply = "Sorry, I couldn't download that photo. Try sending it again."
         else:
             reply, buttons = agent_reply(ctx, text or PHOTO_PROMPT, images=[image],
                                          remember_as=f"[sent a photo] {text}".strip())
     elif command in BRIEF_TRIGGERS or command in TOMORROW_TRIGGERS:
-        # Fixed command: Python gathers facts, the model only writes the summary.
-        reply = build_brief(days_ahead=1 if command in TOMORROW_TRIGGERS else 0, ctx=ctx)
-        memory.remember(chat_id, text, reply, sensitive=True)  # follow-ups like "move my 3pm" get context
+        if over_limit(ctx):
+            reply = LIMIT_REPLY
+        else:  # Fixed command: Python gathers facts, the model only writes the summary.
+            reply = build_brief(days_ahead=1 if command in TOMORROW_TRIGGERS else 0, ctx=ctx)
+            memory.remember(chat_id, text, reply, sensitive=True)  # follow-ups like "move my 3pm" get context
+    elif command.startswith("/timezone"):
+        reply = timezone_reply(ctx, text)
+    elif command.startswith("/brieftime"):
+        reply = brieftime_reply(ctx, text)
     elif command == "/history":
-        reply = history_text(chat_id)
+        reply = history_text(ctx)
     elif command == "/reminders":
         reply = reminders_text(ctx)
     elif command == "/forget":
@@ -140,10 +147,43 @@ def telegram_webhook(
         reply = handle_approval(ctx, text)
         if reply is not None:
             memory.remember(chat_id, text, reply)  # so a later message knows it was approved or declined
+        elif over_limit(ctx):
+            reply = LIMIT_REPLY
         else:
             reply, buttons = agent_reply(ctx, text)
     send_message(chat_id, reply, buttons=buttons)
     return {"ok": True}
+
+
+LIMIT_REPLY = f"You've reached today's limit of {MEMBER_DAILY_LIMIT} messages. It resets at midnight."
+
+
+def over_limit(ctx: ToolContext) -> bool:
+    """Members' fair-use limit, counted only for requests that call an AI model. The owner has none."""
+    return ctx.role != "owner" and settings.count_request(ctx.chat_id, ctx.tz) > MEMBER_DAILY_LIMIT
+
+
+def timezone_reply(ctx: ToolContext, text: str) -> str:
+    parts = text.split(maxsplit=1)
+    if len(parts) == 1:
+        return f"Your timezone: {ctx.tz}. Change it with e.g. /timezone America/New_York or /timezone Asia/Kolkata."
+    name = settings.set_timezone(ctx.chat_id, parts[1])
+    if not name:
+        return "I don't know that timezone. Use a name like America/Chicago, Europe/London or Asia/Kolkata."
+    now = datetime.now(ZoneInfo(name)).strftime("%I:%M %p").lstrip("0")
+    return f"Timezone set to {name} (it's {now} there). New reminders use it; existing ones keep their times."
+
+
+def brieftime_reply(ctx: ToolContext, text: str) -> str:
+    parts = text.split(maxsplit=1)
+    if len(parts) == 1:
+        at = daily.brief_time_for(ctx.chat_id, ctx.role)
+        state = f"Your morning brief comes at {at} ({ctx.tz})." if at else "Your morning brief is off."
+        return state + " Change it with /brieftime 7:30, /brieftime 7am or /brieftime off."
+    value = settings.set_brief_time(ctx.chat_id, parts[1])
+    if value is None:
+        return "Use a time like /brieftime 7:30, /brieftime 7am or /brieftime off."
+    return f"Morning brief set for {value} every day ({ctx.tz})." if value else "Morning brief turned off."
 
 
 # Used when a photo arrives without a caption.
@@ -152,7 +192,8 @@ PHOTO_PROMPT = ("What's in this photo? If it shows dates, times or events, list 
 
 WELCOME = ("I'm Sidekick, an assistant you text. Try: \"remind me to call Mom tomorrow at 10\", \"add a task to "
            "buy milk\", \"what's the weather this weekend?\", or send a photo with a question in the caption. "
-           "/reminders lists your reminders; /forget clears our recent conversation.")
+           "/reminders lists your reminders; /forget clears our recent conversation; /timezone and /brieftime set "
+           "your timezone and an optional morning summary.")
 
 
 def role_of(sender_id: str) -> str | None:
@@ -166,7 +207,8 @@ def role_of(sender_id: str) -> str | None:
 
 def context(chat_id: int, sender_id: str, role: str) -> ToolContext:
     """Who this request is for. Built by the server from Telegram's sender, never from anything the model says."""
-    return ToolContext(chat_id=chat_id, user_id="owner" if role == "owner" else sender_id, role=role)
+    return ToolContext(chat_id=chat_id, user_id="owner" if role == "owner" else sender_id, role=role,
+                       tz=settings.timezone_of(chat_id))
 
 
 def join(text: str, telegram_id: int, name: str) -> str:
@@ -247,12 +289,12 @@ def reminders_text(ctx: ToolContext) -> str:
     return "Upcoming reminders:\n" + "\n".join(lines)
 
 
-def history_text(chat_id: int) -> str:
+def history_text(ctx: ToolContext) -> str:
     """/history: the last things Sidekick did in this chat (episodic memory, read from SQLite)."""
-    rows = recent_actions(chat_id)
+    rows = recent_actions(ctx.chat_id)
     if not rows:
         return "No actions yet."
-    tz = ZoneInfo(OWNER_TIMEZONE)
+    tz = ZoneInfo(ctx.tz)
     lines = []
     for r in reversed(rows):
         when = datetime.fromisoformat(r["at"]).replace(tzinfo=timezone.utc).astimezone(tz).strftime("%b %d %H:%M")

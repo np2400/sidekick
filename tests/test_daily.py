@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app import daily, memory
+from app.trace import ToolContext
 
 # Owner timezone is America/Los_Angeles (UTC-7 in late October).
 BEFORE = datetime(2026, 10, 25, 14, 59, tzinfo=timezone.utc)    # 07:59
@@ -55,4 +56,4 @@ def test_the_brief_is_remembered_as_private_and_failures_dont_escape(sent, monke
     assert past[0].text == "[morning brief]" and private is True
 
     monkeypatch.setattr(daily, "build_brief", lambda days_ahead, ctx: 1 / 0)
-    daily.send_brief(lambda chat_id, text: None, 111)  # logged, not raised: the scheduler keeps running
+    daily.send_brief(lambda chat_id, text: None, ToolContext(chat_id=111))  # logged, not raised: the scheduler keeps running

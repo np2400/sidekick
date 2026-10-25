@@ -71,35 +71,35 @@ def next_occurrence(previous: datetime, repeat: str, tz: str) -> datetime | None
 
 # --- tools the model can call (ctx = who is asking; never chosen by the model) -------------------------
 
-def validate_reminder(text: str, remind_at: str, repeat: str = "none") -> str | None:
+def validate_reminder(text: str, remind_at: str, repeat: str = "none", tz: str = OWNER_TIMEZONE) -> str | None:
     if not text.strip():
         return "The reminder needs some text."
     if repeat not in REPEATS:
         return f"repeat must be one of: {', '.join(REPEATS)}."
     try:
-        when = parse_local(remind_at, OWNER_TIMEZONE)
+        when = parse_local(remind_at, tz)
     except ValueError:
         return "remind_at must be an ISO date-time like 2026-10-22T10:00:00 in the user's timezone."
     now = clock()
     if when < now - timedelta(minutes=1):
-        return f"That time ({label(when, OWNER_TIMEZONE)}) is in the past. Use a future time."
+        return f"That time ({label(when, tz)}) is in the past. Use a future time."
     if when > now + timedelta(days=366):
         return "That's more than a year away."
     return None
 
 
 def create_reminder(text: str, remind_at: str, repeat: str = "none", *, ctx) -> dict:
-    problem = validate_reminder(text, remind_at, repeat)
+    problem = validate_reminder(text, remind_at, repeat, ctx.tz)
     if problem:
         return {"error": problem}
-    when = parse_local(remind_at, OWNER_TIMEZONE)
+    when = parse_local(remind_at, ctx.tz)  # "10:00" means 10:00 where this user is
     with db.connect() as conn:
         rid = conn.execute("INSERT INTO reminders (user_id, chat_id, text, repeat, tz) VALUES (?,?,?,?,?)",
-                           (ctx.user_id, ctx.chat_id, text.strip(), repeat, OWNER_TIMEZONE)).lastrowid
+                           (ctx.user_id, ctx.chat_id, text.strip(), repeat, ctx.tz)).lastrowid
         conn.execute("INSERT INTO deliveries (reminder_id, scheduled_for) VALUES (?,?)", (rid, to_db(when)))
     repeats = "" if repeat == "none" else f", repeats {repeat}"
-    return {"summary": f"Reminder set: {text.strip()} ({label(when, OWNER_TIMEZONE)}{repeats})",
-            "reminder_id": rid, "when": label(when, OWNER_TIMEZONE)}
+    return {"summary": f"Reminder set: {text.strip()} ({label(when, ctx.tz)}{repeats})",
+            "reminder_id": rid, "when": label(when, ctx.tz)}
 
 
 def list_reminders(*, ctx) -> dict:

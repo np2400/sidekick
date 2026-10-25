@@ -8,6 +8,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field
 
+from app.config import OWNER_TIMEZONE
 from app.logging_setup import request_id
 
 
@@ -17,6 +18,7 @@ class ToolContext:
     chat_id: int
     user_id: str = "owner"
     role: str = "owner"  # owner | member: decides which tools exist for this request
+    tz: str = OWNER_TIMEZONE  # the user's timezone: "9am" means 9am where they are
 
 
 @dataclass
