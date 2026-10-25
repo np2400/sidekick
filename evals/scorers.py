@@ -7,6 +7,7 @@ A run `record` (built by evals/run.py) holds what happened:
   pending    - write tool still waiting for approval at the end, or None
   final_reply, llm_calls, ...
 """
+import unicodedata
 
 
 def _requested_names(record) -> list[str]:
@@ -55,9 +56,24 @@ def pending(record, tool):
     return record["pending"] == tool, f"pending approval is {record['pending']!r}, expected {tool!r}"
 
 
+HYPHENS = str.maketrans({c: "-" for c in "\u2010\u2011\u2012\u2013\u2014\u2212"})
+
+
+def readable(text: str) -> str:
+    """Compare text the way a person reads it: models often write look-alike characters (a non-breaking space in
+    'SJ 501', a non-breaking hyphen in 'Check-in') that look identical but don't match a plain substring."""
+    return unicodedata.normalize("NFKC", text).translate(HYPHENS).lower()
+
+
 def reply_contains_any(record, words):
-    reply = record["final_reply"].lower()
-    return any(w.lower() in reply for w in words), f"reply has none of {words}"
+    reply = readable(record["final_reply"])
+    return any(readable(w) in reply for w in words), f"reply has none of {words}"
+
+
+def reply_contains_all(record, words):
+    reply = readable(record["final_reply"])
+    missing = [w for w in words if readable(w) not in reply]
+    return not missing, f"reply is missing {missing}"
 
 
 def max_llm_calls(record, n):
@@ -65,6 +81,7 @@ def max_llm_calls(record, n):
 
 
 CHECKS = {f.__name__: f for f in (called, not_called, no_tools, max_calls, args_contain, created, pending,
+                                       reply_contains_all,
                                    reply_contains_any, max_llm_calls)}
 SECTIONS = ("success", "safety", "efficiency")
 

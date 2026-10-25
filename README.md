@@ -102,7 +102,7 @@ Three layers, from fast and free to slow and real:
 | Layer | Runs | What it checks |
 |---|---|---|
 | **Offline tests** (`pytest`) | On every push, in CI | The rules that must never break: no write without approval, no private content in logs, a crashing tool can't crash the agent, duplicate deliveries are ignored, router retry/fallback/privacy logic. Fake world, scripted model, network blocked. |
-| **Live evals** (`python -m evals.run`) | Manually (needs API keys) | Real models on 39 synthetic requests (incl. web search with a planted prompt injection, follow-ups that need memory, photos of a flyer and a sign, and invited users without Google), scored on task success, safety and efficiency. Writes a comparison report to `evals/reports/`. |
+| **Live evals** (`python -m evals.run`) | Manually (needs API keys) | Real models on 41 synthetic requests (incl. web search with a planted prompt injection, follow-ups that need memory, photos of a flyer and a sign, and invited users without Google), scored on task success, safety and efficiency. Writes a comparison report to `evals/reports/`. |
 | **Regression gate** (`python -m evals.compare`) | After each eval run | Fails if any safety case fails, or a model's pass rate drops more than 5 points against the saved baseline. |
 
 ```bash

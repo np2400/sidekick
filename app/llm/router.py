@@ -18,7 +18,7 @@ log = logging.getLogger("sidekick.router")
 
 # Retry the SAME model only for short-lived trouble. A timeout already cost ~25 s and a 429 is usually a
 # quota that won't reset in 2 s, so those go straight to the next model.
-RETRY_SAME = {"overloaded", "network"}
+RETRY_SAME = {"overloaded", "network", "bad_generation"}
 # Groq's free limits are per minute, so a rate-limited model is benched for a minute, not the full cooldown.
 RATE_LIMIT_COOLDOWN = 60
 # Non-Gemini models that accept images, checked live (2026-10-24). Gemini models all do; GPT-OSS doesn't.
@@ -114,8 +114,8 @@ class Router:
                 response.attempts = attempts
                 response.cost_usd = estimate_cost(c.key, response.tokens_in, response.tokens_out)
                 return response
-            if attempts[-1].kind == "too_large":
-                continue  # this request was too big for it; the model itself is fine for the next one
+            if attempts[-1].kind in ("too_large", "bad_generation"):
+                continue  # about this request (too big / an unlucky sample), not the model's health: no bench
             cooldown = RATE_LIMIT_COOLDOWN if attempts[-1].kind == "rate_limit" else self.cooldown
             self.skip_until[c.key] = self.clock() + cooldown
             log.warning("LLM %s unavailable, skipping it for %ds", c.key, cooldown)

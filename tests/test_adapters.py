@@ -177,3 +177,11 @@ def test_mid_conversation_fallback_from_gemini_to_groq():
     assert sent[2]["tool_calls"][0]["id"] == "g1" and sent[3]["tool_call_id"] == "g1"  # ids line up
     assert result.trace.models == ["gemini:gemini-3.8-flash", "groq:qwen/qwen3.8-27b"]
     assert result.trace.fallbacks == ["gemini:gemini-3.8-flash:overloaded", "gemini:gemini-3.8-flash:overloaded"]
+
+
+def test_groq_parsing_failure_is_classified_as_bad_generation():
+    body = {"error": {"message": "Parsing failed. The model generated output that could not be parsed.",
+                      "code": "tool_use_failed", "failed_generation": "<|call|>read_email{"}}
+    with pytest.raises(ProviderError) as exc:
+        groq(FakeServer((400, body))).complete("openai/gpt-oss-120b", [Message("user", text="hi")], TOOLS, "s", 10)
+    assert exc.value.kind == "bad_generation"

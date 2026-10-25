@@ -71,6 +71,10 @@ class OpenAICompatAdapter:
             raise ProviderError("timeout", str(exc)) from exc
         except httpx.HTTPError as exc:
             raise ProviderError("network", type(exc).__name__) from exc
+        if r.status_code == 400 and "failed_generation" in r.text:
+            # Groq: the MODEL garbled its own tool-call format ("Parsing failed"). A sampling glitch, not a bad
+            # request on our side: worth one retry on the same model.
+            raise ProviderError("bad_generation", r.text[:200])
         if r.status_code != 200:
             raise ProviderError(classify_status(r.status_code), r.text[:200])
         return self.parse(r.json(), model, int((time.time() - started) * 1000))

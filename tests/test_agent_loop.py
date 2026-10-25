@@ -60,13 +60,35 @@ def test_bad_arguments_are_rejected_before_the_tool_runs(world):
     assert world.calls == []  # never executed
 
 
-def test_step_limit_stops_a_runaway_loop(world):
-    llm = ScriptedProvider(*[[call("list_tasks")] for _ in range(MAX_STEPS)])
+def test_step_limit_answers_from_what_was_found_instead_of_giving_up(world):
+    """Production, 2026-10-25: a trip question read emails until the limit, then replied only 'stuck in a loop'."""
+    llm = ScriptedProvider(*[[call("list_tasks")] for _ in range(MAX_STEPS)],
+                           [text("**You have** 1 open task: Return dumbbell. I couldn't check more.")])
     result = run_agent("loop forever", CTX, llm=llm, tools=world.tools())
 
     assert result.trace.outcome == "step_limit"
-    assert llm.calls == MAX_STEPS
-    assert "stuck" in result.reply
+    assert llm.calls == MAX_STEPS + 1                       # one last call writes the answer...
+    final = llm.received[-1]
+    assert len(final) == 1 and "Return dumbbell" in final[0].text  # ...from the tool results, as one plain prompt
+    assert result.reply == "You have 1 open task: Return dumbbell. I couldn't check more."  # Markdown stripped
+
+
+def test_step_limit_still_says_sorry_if_no_model_can_write_the_answer(world):
+    llm = ScriptedProvider(*[[call("list_tasks")] for _ in range(MAX_STEPS)], AllProvidersFailed([]))
+    result = run_agent("loop forever", CTX, llm=llm, tools=world.tools())
+    assert result.trace.outcome == "step_limit" and "stuck" in result.reply
+
+
+def test_email_research_has_a_per_message_budget(world):
+    llm = ScriptedProvider(*[[call("read_email", message_id="m1")] for _ in range(4)], [text("Sam asked about Tuesday.")])
+    run_agent("read all my emails", CTX, llm=llm, tools=world.tools())
+    reads = [name for name, _ in world.calls if name == "read_email"]
+    assert len(reads) == 3  # the 4th read was refused with "answer now with what you have"
+
+
+def test_markdown_markers_are_removed_for_telegram():
+    from app.agent import plain
+    assert plain("## Plan\n**Day 1** - __temple__ visit") == "Plan\nDay 1 - temple visit"
 
 
 def test_web_tools_have_a_per_message_budget():

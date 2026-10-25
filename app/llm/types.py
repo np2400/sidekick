@@ -42,7 +42,8 @@ class Message:
 class Attempt:
     """One failed or skipped try, kept so the trace can show the fallback path."""
     candidate: str  # "provider:model"
-    kind: str       # rate_limit | overloaded | timeout | network | auth | too_large | bad_request | bad_response | skipped
+    kind: str       # rate_limit | overloaded | timeout | network | auth | too_large | bad_generation | bad_request |
+                    # bad_response | skipped
     ms: int = 0
 
 

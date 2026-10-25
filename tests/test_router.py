@@ -95,6 +95,17 @@ def test_rate_limited_model_is_benched_for_one_minute_only():
     assert router.complete(MSG, [], "sys").provider == "gemini"  # per-minute quota has reset
 
 
+def test_a_garbled_tool_call_is_retried_once_on_the_same_model_without_benching_it():
+    """Groq 400 'Parsing failed' (failed_generation): the model's own output glitch, seen in a live eval."""
+    gemini, groq = FakeAdapter("gemini", "bad_generation", "ok"), FakeAdapter("groq")
+    router, clock = make([gemini, groq], [A, B])
+    assert router.complete(MSG, [], "sys").provider == "gemini" and clock.slept == [2.0]
+
+    gemini.outcomes = ["bad_generation", "bad_generation"]
+    assert router.complete(MSG, [], "sys").provider == "groq"    # two glitches: fall back...
+    assert router.complete(MSG, [], "sys").provider == "gemini"  # ...but don't bench it for the next message
+
+
 def test_too_large_request_falls_back_without_benching_the_model():
     assert classify_status(413) == "too_large"  # Groq: request bigger than the free tokens-per-minute limit
     gemini, groq = FakeAdapter("gemini", "too_large"), FakeAdapter("groq")

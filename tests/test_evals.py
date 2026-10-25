@@ -195,3 +195,11 @@ def test_eval_models_are_built_with_production_capabilities(monkeypatch):
     monkeypatch.setattr(runner, "default_router", lambda: type("R", (), {"adapters": {"gemini": object()}})())
     throttle = runner.model_llm("gemini:gemini-3.5-flash")
     assert throttle.llm.__self__.candidates[0].vision is True
+
+
+
+def test_reply_checks_read_text_like_a_person():
+    """Regression: gpt-oss wrote 'SJ\u00a0501' (non-breaking space) and the check said 'SJ 501' was missing."""
+    from evals.scorers import reply_contains_all
+    record = {"final_reply": "Flight SJ\u00a0501, check\u2011in after 2\u202fPM"}
+    assert reply_contains_all(record, ["SJ 501", "check-in", "2 PM"])[0]
