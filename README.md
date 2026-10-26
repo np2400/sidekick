@@ -13,14 +13,14 @@ Built from scratch in Python (FastAPI), with no agent framework: a hand-written 
 ## What it does
 
 - **Chat on Telegram:** "What's on my calendar tomorrow?", "When am I meeting Nilesh?" (searches the calendar by name, even with spelling differences), "Add a task to call the dentist", "Summarize Sam's latest email", "/brief".
-- **Conversations:** follow-ups like "what is this?" after a photo, or "yes" to an offer, work because the last few messages of the current conversation are sent along (a 2-hour pause or `/new` starts a new one). Saved history is kept 30 days, encrypted, never photos themselves; `/forget` deletes the current conversation, `/forget all` every one.
+- **Conversations:** follow-ups like "what is this?" after a photo, or "yes" to an offer, work because the last few messages of the current conversation are sent along (a 2-hour pause or `/new` starts a new one). Saved history is kept 30 days, encrypted, never photos themselves; `/forget` deletes the current conversation, `/forget_all` every one.
 - **Photos:** send a flyer, schedule or screenshot and ask about it, or have it turned into reminders and events. Photos have their own model order (Gemini first: right 5/5 vs Qwen 1/4 on the same photo) and never go to text-only models.
 - **Morning brief:** each user picks a time with `/brieftime` (the owner's defaults to 8:00, members' to off) and gets today's plan in their own timezone (`/timezone`), at most once a day even across restarts.
 - **Reminders on Telegram:** "Remind me to call Dad tomorrow at 10", "every weekday at 9am". They arrive with Done, Snooze 1 hour and Tomorrow buttons, and survive restarts.
 - **Built-in task list** stored in Sidekick's own database (or Todoist, if you prefer).
 - **Invite-only, multi-user:** the owner sends `/invite` and gets a one-time link (24 h, stored only as a SHA-256 fingerprint). Each user's reminders, tasks, memory and approvals are isolated by chat, and invited users get a tool set without the owner's Google and Todoist accounts: the tools simply don't exist for them, so a manipulated model can't call them. Isolation tests try to cross every boundary. Members can connect their own Google Calendar with `/connect`, and opt in to read-only Gmail with `/connect gmail` (OAuth web flow with PKCE, a single-use state and incremental authorization; tokens encrypted with a key kept outside the database; `/disconnect` revokes access). Each request uses the asking user's own token, never the owner's. Users can `/export` everything stored about them and `/delete_me` (one module lists every per-person table, and a test fails if a new table isn't covered); the owner sees `/users` (activity, never content) and can `/remove` a member. Members have a daily fair-use limit (default 50 AI requests) so one person can't use up the free model quotas.
 - **Approval before outside writes:** the model can only *propose* a task or calendar event; code holds it until you tap ✅. Your own reminders are created immediately with an Undo button.
-- **Optional integrations:** Google Calendar and Gmail read-only (OAuth 2.0 with PKCE), Todoist (API token, `TASK_BACKEND=todoist`), web search (Tavily), web pages through the Fetch MCP server.
+- **Optional integrations:** Google Calendar and Gmail read-only (OAuth 2.0 with PKCE), Todoist (API token, `TASK_BACKEND=todoist`), web search (Tavily), weather forecasts (Open-Meteo, no key), web pages through the Fetch MCP server.
 - **MCP both ways:** Sidekick uses an external MCP server, and exposes its own read-only tools to MCP clients.
 
 ## How it works
@@ -102,7 +102,7 @@ Three layers, from fast and free to slow and real:
 | Layer | Runs | What it checks |
 |---|---|---|
 | **Offline tests** (`pytest`) | On every push, in CI | The rules that must never break: no write without approval, no private content in logs, a crashing tool can't crash the agent, duplicate deliveries are ignored, router retry/fallback/privacy logic. Fake world, scripted model, network blocked. |
-| **Live evals** (`python -m evals.run`) | Manually (needs API keys) | Real models on 43 synthetic requests (incl. web search with a planted prompt injection, follow-ups that need memory, photos of a flyer and a sign, and invited users without Google), scored on task success, safety and efficiency. Writes a comparison report to `evals/reports/`. |
+| **Live evals** (`python -m evals.run`) | Manually (needs API keys) | Real models on 46 synthetic requests (incl. web search with a planted prompt injection, follow-ups that need memory, photos of a flyer and a sign, and invited users without Google), scored on task success, safety and efficiency. Writes a comparison report to `evals/reports/`. |
 | **Regression gate** (`python -m evals.compare`) | After each eval run | Fails if any safety case fails, or a model's pass rate drops more than 5 points against the saved baseline. |
 
 ```bash

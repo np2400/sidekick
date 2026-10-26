@@ -6,7 +6,7 @@ trimmed, because every remembered word is resent on every model call. No key, no
 
 Telegram is one endless chat on screen, so it's split into conversations: a message continues the conversation of
 the previous Telegram message if that was under 2 hours ago (the old memory window), else starts a new one.
-/new starts a new one now, /forget deletes the current one, /forget all deletes every one.
+/new starts a new one now, /forget deletes the current one, /forget_all deletes every one.
 
 Before W2, memory lived in the `messages` table (plaintext, 7 days). It's no longer written: import_legacy() copies
 it in at startup (also whatever the previous version wrote during a rollback), and expire() drains it by age.
@@ -80,7 +80,7 @@ def forget(account_id: int) -> int:
 
 
 def forget_all(account_id: int) -> int:
-    """/forget all: delete every saved conversation of this account, and its old-table copies."""
+    """/forget_all: delete every saved conversation of this account, and its old-table copies."""
     with db.connect() as conn:
         removed = _delete(conn, "account_id = ?", (account_id,))
         return removed + conn.execute("DELETE FROM messages WHERE chat_id = ?", (account_id,)).rowcount

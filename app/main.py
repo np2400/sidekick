@@ -178,13 +178,13 @@ def telegram_webhook(
     elif command == "/forget":
         n = memory.forget(ctx.chat_id)
         reply = f"Done: I forgot our recent conversation ({n} messages)."
-    elif command == "/forget all":
+    elif command in ("/forget_all", "/forget all"):  # one word, so Telegram makes it tappable
         n = memory.forget_all(ctx.chat_id)
         reply = f"Done: I deleted all your saved conversations ({n} messages)."
     elif command == "/new":
         memory.new_conversation(ctx.chat_id)
         reply = ("New conversation started: I won't use our earlier messages as context. They stay in your "
-                 "history for 30 days; /forget all deletes them.")
+                 "history for 30 days; /forget_all deletes them.")
     elif command.startswith("/start"):
         reply = WELCOME
     elif command == "/invite":
@@ -219,7 +219,7 @@ HELP = ("Just write to me, or send a photo with a question in the caption. Comma
         "/brief - today's plan  ·  /reminders - upcoming reminders  ·  /history - what I did recently\n"
         "/timezone, /brieftime - your timezone and morning summary\n"
         "/connect, /connect gmail, /disconnect - your Google Calendar and Gmail (read-only)\n"
-        "/new - start a fresh conversation  ·  /forget - delete this conversation  ·  /forget all - delete all "
+        "/new - start a fresh conversation  ·  /forget - delete this conversation  ·  /forget_all - delete all "
         "saved conversations\n"
         "/export - all your data as a file  ·  /delete_me - erase it")
 OWNER_HELP = "\nOwner: /invite - invite link  ·  /users - members  ·  /remove NAME [delete] - end access"

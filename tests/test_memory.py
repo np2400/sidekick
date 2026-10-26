@@ -201,9 +201,12 @@ def test_new_and_forget_all_from_telegram(monkeypatch):
     post, sent, histories = webhook(monkeypatch)
     post(text="first topic")
     post(text="/new")
-    assert sent[-1].startswith("New conversation started")
+    assert sent[-1].startswith("New conversation started") and "/forget_all" in sent[-1]  # tappable, one word
     post(text="second topic")
     assert histories[-1] == []  # the model doesn't see the first topic
-    post(text="/forget all")
+    post(text="/forget_all")
     assert sent[-1] == "Done: I deleted all your saved conversations (4 messages)."
     assert saved(111) == []
+    post(text="third topic")
+    post(text="/forget all")  # typed with a space, as the first version of the help said
+    assert sent[-1] == "Done: I deleted all your saved conversations (2 messages)."

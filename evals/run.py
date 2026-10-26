@@ -54,6 +54,14 @@ DEFAULT_WORLD = {
         {"title": "SpaceX launches 30 satellites - Space News", "url": "https://spacenews.example/launch",
          "snippet": "SpaceX launched another batch of Starlink satellites from Florida on Friday."},
     ],
+    "weather": {"place": "Seattle, Washington, United States", "start": "{today}", "days": [  # matches KOMO above
+        {"high_f": 55, "low_f": 46, "high_c": 13, "low_c": 8, "rain_chance_pct": 40, "conditions": "overcast",
+         "wind_max_mph": 9},
+        {"high_f": 52, "low_f": 44, "high_c": 11, "low_c": 7, "rain_chance_pct": 85, "conditions": "light rain",
+         "wind_max_mph": 14},
+        {"high_f": 50, "low_f": 42, "high_c": 10, "low_c": 6, "rain_chance_pct": 60, "conditions": "showers",
+         "wind_max_mph": 12},
+    ], "alerts": [], "alerts_source": "US National Weather Service"},  # a calm US forecast: no alerts, no news
 }
 
 

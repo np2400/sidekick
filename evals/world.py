@@ -3,6 +3,8 @@
 Used by the offline tests AND the live evals, so a model is always tested against synthetic data,
 never against your real accounts.
 """
+from datetime import date, timedelta
+
 import httpx
 
 CRASHES = {"ReadTimeout": httpx.ReadTimeout, "ConnectError": httpx.ConnectError}
@@ -11,12 +13,13 @@ CRASHES = {"ReadTimeout": httpx.ReadTimeout, "ConnectError": httpx.ConnectError}
 class FakeWorld:
     """In-memory accounts. Every tool call is recorded in `self.calls`."""
 
-    def __init__(self, tasks=None, events=None, emails=None, reminders=None, web=None):
+    def __init__(self, tasks=None, events=None, emails=None, reminders=None, web=None, weather=None):
         self.tasks = list(tasks or [])
         self.events = list(events or [])
         self.emails = list(emails or [])
         self.reminders = list(reminders or [])  # dicts: id, text, next, repeat
         self.web = list(web or [])              # search results: dicts with title, url, snippet
+        self.weather = weather or {}            # place, start (a date), days: one dict per day from start
         self.calls: list[tuple[str, dict]] = []
         self.failures: dict[str, object] = {}  # tool name -> error dict to return, or Exception to raise
 
@@ -49,6 +52,7 @@ class FakeWorld:
             "list_reminders": self.list_reminders,
             "cancel_reminder": self.cancel_reminder,
             "web_search": self.web_search,
+            "get_weather": self.get_weather,
         }
 
     def get_current_time(self, timezone: str = "America/Los_Angeles") -> dict:
@@ -127,11 +131,25 @@ class FakeWorld:
         return self._enter("web_search", {"query": query, "recent": recent}) or {
             "query": query, "results": self.web[:max_results]}
 
+    def get_weather(self, place: str, days: int = 3) -> dict:
+        """Same shape as app/weather.py: the canned forecast, whatever the place (cases check the place)."""
+        error = self._enter("get_weather", {"place": place, "days": days})
+        if error:
+            return error
+        if not self.weather:
+            return {"error": f"No place called '{place}' was found. Ask the user which city they mean."}
+        start = date.fromisoformat(self.weather["start"])
+        forecast = [{"date": (start + timedelta(days=i)).isoformat(),
+                     "weekday": (start + timedelta(days=i)).strftime("%A"), **day}
+                    for i, day in enumerate(self.weather["days"][:max(1, int(days or 3))])]
+        extras = {k: self.weather[k] for k in ("alerts", "alerts_source", "severe", "news") if k in self.weather}
+        return {"place": self.weather["place"], "source": "Open-Meteo", "days": forecast, **extras}
+
     @classmethod
     def from_seed(cls, seed: dict) -> "FakeWorld":
         """Build a world from a dataset case's `world` field (JSON-friendly)."""
         world = cls(tasks=seed.get("tasks"), events=seed.get("events"), emails=seed.get("emails"),
-                    reminders=seed.get("reminders"), web=seed.get("web"))
+                    reminders=seed.get("reminders"), web=seed.get("web"), weather=seed.get("weather"))
         for tool, failure in (seed.get("fail") or {}).items():
             if "raise" in failure:  # {"raise": "ReadTimeout"} -> the tool crashes with that exception
                 world.fail(tool, CRASHES[failure["raise"]](f"simulated {failure['raise']}"))

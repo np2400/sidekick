@@ -45,6 +45,10 @@ and a few people the owner invites with a one-time link; there is no public sign
     itineraries and vouchers often are). It cannot send, change or delete email.</li>
   <li><strong>Web search</strong>: when a question needs current information, the search query is sent to
     Tavily, a search service, which returns public web results.</li>
+  <li><strong>Weather</strong>: the place you ask about (only the place) is sent to Open-Meteo, a weather
+    service, for its forecast; for places in the US, its location also goes to the US National Weather Service for
+    official alerts. If severe weather is expected there, a news search about it (the place and the kind of
+    weather) goes to Tavily.</li>
   <li><strong>Photos</strong> you send the bot: passed to an AI model that can read images (currently Google
     Gemini, with Qwen on Groq as a backup) to answer you. Sidekick does not store photos.</li>
 </ul>
@@ -82,7 +86,7 @@ Policy</a>, including the Limited Use requirements.</p>
   <li><code>/export</code> sends you a file with everything Sidekick has stored about you (sign-in tokens excepted).</li>
   <li><code>/delete_me</code> erases all of it and revokes Google access. Copies in the encrypted backups are
     overwritten within 7 days.</li>
-  <li><code>/forget</code> deletes the current conversation, <code>/forget all</code> deletes every saved
+  <li><code>/forget</code> deletes the current conversation, <code>/forget_all</code> deletes every saved
     conversation, and <code>/new</code> starts a fresh one; <code>/disconnect</code> removes Google access.</li>
   <li>Disconnect Google at any time at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
   <li>The owner can end an invited user's access; their data then stays until they or the owner delete it.</li>

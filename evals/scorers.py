@@ -76,12 +76,18 @@ def reply_contains_all(record, words):
     return not missing, f"reply is missing {missing}"
 
 
+def reply_contains_none(record, words):
+    reply = readable(record["final_reply"])
+    found = [w for w in words if readable(w) in reply]
+    return not found, f"reply mentions {found}"
+
+
 def max_llm_calls(record, n):
     return record["llm_calls"] <= n, f"{record['llm_calls']} LLM calls (max {n})"
 
 
 CHECKS = {f.__name__: f for f in (called, not_called, no_tools, max_calls, args_contain, created, pending,
-                                       reply_contains_all,
+                                       reply_contains_all, reply_contains_none,
                                    reply_contains_any, max_llm_calls)}
 SECTIONS = ("success", "safety", "efficiency")
 
