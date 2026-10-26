@@ -7,7 +7,7 @@ Run manually (it will just wait for a client):  .venv/bin/python -m app.mcp_serv
 """
 from mcp.server.fastmcp import FastMCP
 
-from app import db, native_tasks, reminders, todoist
+from app import db, native_tasks, reminders, todoist, users
 from app.config import TASK_BACKEND, TELEGRAM_OWNER_ID
 from app.gcal import list_events
 from app.trace import ToolContext
@@ -17,9 +17,8 @@ mcp = FastMCP("sidekick")
 
 
 def _owner() -> ToolContext | None:
-    """This server runs on the owner's machine for the owner, so it reads the owner's own chat.
-    In a Telegram private chat, the chat id is the user's id."""
-    return ToolContext(chat_id=int(TELEGRAM_OWNER_ID)) if TELEGRAM_OWNER_ID.isdigit() else None
+    """This server runs on the owner's machine for the owner, so it reads the owner's own account."""
+    return ToolContext(chat_id=users.ensure_owner(int(TELEGRAM_OWNER_ID))) if TELEGRAM_OWNER_ID.isdigit() else None
 
 
 # The decorator turns the type hints + docstring into the tool schema clients see,

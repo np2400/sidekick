@@ -25,13 +25,15 @@ from app.trace import ToolContext
 setup_logging()  # timestamp + request id on every line; LOG_LEVEL=DEBUG shows content (laptop only)
 log = logging.getLogger("sidekick")
 db.init()  # create or upgrade the SQLite schema before handling any request
+if synced := users.sync_from_legacy(TELEGRAM_OWNER_ID):  # only after a rollback to the previous version
+    log.warning("Accounts updated from the users table: %d changes made by the previous version", synced)
 
 
 
 @asynccontextmanager
 async def lifespan(_app):
     """Start the reminder scheduler with the server, stop it on shutdown."""
-    scheduler = reminders.Scheduler(send_message, jobs=[daily.tick]) if SCHEDULER_ENABLED else None
+    scheduler = reminders.Scheduler(send_to_account, jobs=[daily.tick]) if SCHEDULER_ENABLED else None
     _app.state.scheduler = scheduler  # /health checks it
     if scheduler:
         scheduler.start()
@@ -69,17 +71,17 @@ def google_callback(state: str = "", code: str = "", error: str = "") -> HTMLRes
     if error or not (state and code):
         return page("Not connected", "Google sign-in was cancelled. Send /connect in Telegram to try again.", 400)
     try:
-        chat_id, email, gmail = google_web.finish(state, code)
+        account_id, email, gmail = google_web.finish(state, code)
     except google_web.ConnectError as exc:
         return page("Not connected", str(exc), 400)
     except VaultError:
         log.exception("Can't store a Google token")
         return page("Not connected", "Sidekick can't store the connection safely right now. Try again later.", 500)
     what = "Google Calendar and Gmail (read-only)" if gmail else "Google Calendar"
-    log.info("Google connected for %s (gmail: %s)", chat_id, gmail)
+    log.info("Google connected for %s (gmail: %s)", account_id, gmail)
     try_it = "\"any important emails today?\"" if gmail else "\"what's on my calendar tomorrow?\""
-    send_message(chat_id, f"✅ {what} connected{f' ({email})' if email else ''}. Try: {try_it} "
-                          "Send /disconnect to remove access.")
+    send_to_account(account_id, f"✅ {what} connected{f' ({email})' if email else ''}. Try: {try_it} "
+                                "Send /disconnect to remove access.")
     return page("Connected ✅", f"Your {what} is connected to Sidekick. You can close this page and go back to "
                                "Telegram.")
 
@@ -133,15 +135,17 @@ def telegram_webhook(
         return {"ok": True}
 
     # 4. Authorize: the owner, or a member who joined with an invite. Strangers can only redeem an invite.
+    #    From here on, data is stored under the sender's account (ctx.chat_id); replies go to this Telegram chat.
     command = text.strip().lower()
-    role = role_of(sender_id)
-    if role is None:
+    found = who(sender_id)
+    if found is None:
         if command.startswith("/start") and sender_id.isdigit():
             send_message(chat_id, join(text, int(sender_id), message.get("from", {}).get("first_name", "")))
         else:
             log.warning("Ignoring stranger %s. If this is you, set TELEGRAM_OWNER_ID=%s in .env", sender_id, sender_id)
         return {"ok": True}
-    ctx = context(chat_id, sender_id, role)
+    role, account_id = found
+    ctx = context(account_id, sender_id, role)
 
     # 5. Approve: if a write is pending, this message is the user's yes/no.
     # 6. Think: otherwise the model (via the router) decides whether to answer directly or call a Python tool.
@@ -159,7 +163,7 @@ def telegram_webhook(
             reply = LIMIT_REPLY
         else:  # Fixed command: Python gathers facts, the model only writes the summary.
             reply = build_brief(days_ahead=1 if command in TOMORROW_TRIGGERS else 0, ctx=ctx)
-            memory.remember(chat_id, text, reply, sensitive=True)  # follow-ups like "move my 3pm" get context
+            memory.remember(ctx.chat_id, text, reply, sensitive=True)  # follow-ups like "move my 3pm" get context
     elif command.startswith("/timezone"):
         reply = timezone_reply(ctx, text)
     elif command.startswith("/brieftime"):
@@ -169,12 +173,12 @@ def telegram_webhook(
     elif command == "/reminders":
         reply = reminders_text(ctx)
     elif command == "/forget":
-        n = memory.forget(chat_id)
+        n = memory.forget(ctx.chat_id)
         reply = f"Done: I forgot our recent conversation ({n} messages)."
     elif command.startswith("/start"):
         reply = WELCOME
     elif command == "/invite":
-        reply = invite_text(int(sender_id)) if role == "owner" else "Only the owner can invite people."
+        reply = invite_text(ctx.chat_id) if role == "owner" else "Only the owner can invite people."
     elif command in ("/connect", "/connect gmail"):
         reply, buttons = connect_reply(ctx, gmail=command == "/connect gmail")
     elif command == "/disconnect":
@@ -182,15 +186,15 @@ def telegram_webhook(
     elif command == "/help":
         reply = HELP + (OWNER_HELP if role == "owner" else "")
     elif command == "/export":
-        reply = export_reply(ctx)
+        reply = export_reply(ctx, chat_id)
     elif command.startswith("/delete_me"):
         reply = delete_me_reply(ctx, confirmed=command == "/delete_me confirm")
     elif command == "/users" or command.startswith("/remove"):
-        reply = admin_reply(command, text) if role == "owner" else "Only the owner can manage members."
+        reply = admin_reply(ctx, command, text) if role == "owner" else "Only the owner can manage members."
     else:
         reply = handle_approval(ctx, text)
         if reply is not None:
-            memory.remember(chat_id, text, reply)  # so a later message knows it was approved or declined
+            memory.remember(ctx.chat_id, text, reply)  # so a later message knows it was approved or declined
         elif over_limit(ctx):
             reply = LIMIT_REPLY
         else:
@@ -209,10 +213,10 @@ HELP = ("Just write to me, or send a photo with a question in the caption. Comma
 OWNER_HELP = "\nOwner: /invite - invite link  ·  /users - members  ·  /remove NAME [delete] - end access"
 
 
-def export_reply(ctx: ToolContext) -> str:
+def export_reply(ctx: ToolContext, telegram_chat: int) -> str:
     """/export: a JSON file of everything stored about this person (the 'right to access')."""
     data = json.dumps(account.export_data(ctx.chat_id), indent=2, ensure_ascii=False).encode()
-    sent = send_document(ctx.chat_id, f"sidekick-export-{datetime.now(timezone.utc):%Y-%m-%d}.json", data,
+    sent = send_document(telegram_chat, f"sidekick-export-{datetime.now(timezone.utc):%Y-%m-%d}.json", data,
                          caption="Everything Sidekick has stored about you.")
     return "That's all of it. /delete_me erases it." if sent else "Sorry, I couldn't send the file. Try again later."
 
@@ -228,10 +232,11 @@ def delete_me_reply(ctx: ToolContext, confirmed: bool) -> str:
         "" if ctx.role == "owner" else " To come back, you'd need a new invite.")
 
 
-def admin_reply(command: str, text: str) -> str:
-    """/users and /remove (owner only): who's here and how active, never what anyone wrote."""
+def admin_reply(ctx: ToolContext, command: str, text: str) -> str:
+    """/users and /remove (owner only, so ctx is the owner's account): who's here and how active, never what
+    anyone wrote."""
     if command == "/users":
-        members = account.members_overview()
+        members = account.members_overview(ctx.chat_id)
         if not members:
             return "No members yet. /invite creates an invite link."
         lines = [f"{m['name'] or 'Unnamed'} ({m['telegram_id']}) - {m['status']}, joined {m['joined_at'][:10]}, "
@@ -241,17 +246,17 @@ def admin_reply(command: str, text: str) -> str:
         return "Members:\n" + "\n".join(lines)
     parts = text.split()
     wipe = len(parts) > 2 and parts[-1].lower() == "delete"
-    who = " ".join(parts[1:-1] if wipe else parts[1:])
-    if not who:
+    name = " ".join(parts[1:-1] if wipe else parts[1:])
+    if not name:
         return "Use /remove NAME, or /remove NAME delete to also erase their data."
-    matches = account.find_member(who)
+    matches = account.find_member(name, ctx.chat_id)
     if len(matches) != 1:
         found = ", ".join(f"{m['name']} ({m['telegram_id']})" for m in matches)
-        return f"More than one match: {found}. Use the number." if matches else f"No active member called {who}."
+        return f"More than one match: {found}. Use the number." if matches else f"No active member called {name}."
     member = matches[0]
-    account.remove_member(member["telegram_id"])
+    account.remove_member(member["account_id"])
     if wipe:
-        account.delete_everything(member["telegram_id"])
+        account.delete_everything(member["account_id"])
     return (f"Removed {member['name']}: no more access, reminders stopped, Google disconnected"
             + (", and all their data deleted." if wipe else ". Their data stays until deleted."))
 
@@ -295,21 +300,33 @@ WELCOME = ("I'm Sidekick, an assistant you text. Try: \"remind me to call Mom to
            "gmail your email, read-only).")
 
 
-def role_of(sender_id: str) -> str | None:
-    """'owner', 'member', or None for a stranger. The owner comes from config, members from the users table."""
+def who(sender_id: str) -> tuple[str, int] | None:
+    """(role, account id) for a Telegram sender, or None for a stranger. The owner comes from config, members from
+    an active account that this Telegram login belongs to."""
     if not sender_id.isdigit():
         return None
     if sender_id == TELEGRAM_OWNER_ID:
-        return "owner"
-    return "member" if users.is_member(int(sender_id)) else None
+        return "owner", users.ensure_owner(int(sender_id))
+    account_id = users.account_for("telegram", sender_id)
+    return ("member", account_id) if account_id is not None else None
 
 
-def context(chat_id: int, sender_id: str, role: str) -> ToolContext:
+def context(account_id: int, sender_id: str, role: str) -> ToolContext:
     """Who this request is for. Built by the server from Telegram's sender, never from anything the model says."""
-    google = google_web.connection(chat_id) if role != "owner" else None  # the owner's Google is server-level
-    return ToolContext(chat_id=chat_id, user_id="owner" if role == "owner" else sender_id, role=role,
-                       tz=settings.timezone_of(chat_id),
+    google = google_web.connection(account_id) if role != "owner" else None  # the owner's Google is server-level
+    return ToolContext(chat_id=account_id, user_id="owner" if role == "owner" else sender_id, role=role,
+                       tz=settings.timezone_of(account_id),
                        calendar=bool(google and google["calendar"]), gmail=bool(google and google["gmail"]))
+
+
+def send_to_account(account_id: int, text: str, buttons: list | None = None) -> dict:
+    """Reminders, the brief and Google's confirmation are addressed to an account. Telegram needs that account's
+    chat, which is looked up, never assumed from the account id. Same result shape as send_message."""
+    chat = users.telegram_chat(account_id)
+    if chat is None:
+        log.warning("Account %s has no Telegram to send to", account_id)
+        return {"ok": False, "description": "no Telegram linked to this account"}
+    return send_message(chat, text, buttons=buttons)
 
 
 def connect_reply(ctx: ToolContext, gmail: bool = False) -> tuple[str, list | None]:
@@ -403,16 +420,17 @@ def handle_button(query: dict) -> None:
     message = query.get("message") or {}
     chat_id = message.get("chat", {}).get("id")
     log.info("Button press from %s", sender_id)
-    role = role_of(sender_id)
-    if role is None or chat_id is None:
+    found = who(sender_id)
+    if found is None or chat_id is None:
         answer_button(query["id"])
         return
     choice, _, item_id = (query.get("data") or "").partition(":")
     if choice not in BUTTONS or not item_id.isdigit():
         answer_button(query["id"], "Unknown button")
         return
-    reply = BUTTONS[choice](context(chat_id, sender_id, role), int(item_id))
-    memory.remember(chat_id, f"[tapped {choice}]", reply)  # e.g. a later "move it to 4pm" knows what was approved
+    ctx = context(found[1], sender_id, found[0])
+    reply = BUTTONS[choice](ctx, int(item_id))
+    memory.remember(ctx.chat_id, f"[tapped {choice}]", reply)  # a later "move it to 4pm" knows what was approved
     answer_button(query["id"])                          # stop the spinner on the button
     remove_buttons(chat_id, message.get("message_id"))  # each button works once
     send_message(chat_id, reply)

@@ -11,7 +11,7 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from app import brief, db, gcal, gmail, google_auth, google_web, main, vault
+from app import brief, db, gcal, gmail, google_auth, google_web, main, users, vault
 from app.agent import system_prompt, tools_for
 from app.logging_setup import HideQueryStrings
 from app.trace import ToolContext
@@ -109,6 +109,7 @@ def test_the_callback_page_confirms_and_telegram_gets_a_message(google, monkeypa
     sent = []
     monkeypatch.setattr(main, "send_message", lambda chat_id, text, buttons=None: sent.append((chat_id, text)))
     client = TestClient(main.app)
+    users.redeem(users.create_invite(OWNER), DAD, "Dad")  # only members can /connect; the message goes to Telegram
 
     ok = client.get("/oauth/google/callback", params={"state": state_from(google_web.start(DAD)), "code": "c"})
     assert ok.status_code == 200 and "Connected" in ok.text

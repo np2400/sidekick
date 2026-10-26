@@ -13,7 +13,7 @@ from app.db.store import log_action, save_trace
 from app.trace import AgentResult, ToolContext, Trace
 
 OWNER, SAM, DAD = 111, 222, 333
-PERSON_COLUMNS = {"chat_id", "telegram_id", "used_by"}
+PERSON_COLUMNS = {"chat_id", "telegram_id", "used_by", "account_id"}
 
 
 def tomorrow_at(hour: int) -> str:

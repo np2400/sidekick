@@ -32,9 +32,10 @@ def brief_time_for(chat_id: int, role: str) -> str:
 
 
 def recipients() -> list[ToolContext]:
-    """Everyone who may get a brief: the owner and active members, each with their own timezone."""
-    people = [(int(TELEGRAM_OWNER_ID), "owner")] if TELEGRAM_OWNER_ID.isdigit() else []
-    people += [(member, "member") for member in users.active_members()]
+    """Everyone who may get a brief (by account id): the owner and active members, each with their own timezone."""
+    owner = users.ensure_owner(int(TELEGRAM_OWNER_ID)) if TELEGRAM_OWNER_ID.isdigit() else None
+    people = [(owner, "owner")] if owner is not None else []
+    people += [(member, "member") for member in users.active_members(owner)]
     return [ToolContext(chat_id=chat_id, user_id="owner" if role == "owner" else str(chat_id), role=role,
                         tz=settings.timezone_of(chat_id)) for chat_id, role in people]
 

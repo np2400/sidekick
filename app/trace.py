@@ -15,7 +15,7 @@ from app.logging_setup import request_id
 @dataclass
 class ToolContext:
     """Who a request is for. Set by the server from the Telegram sender, never by the model."""
-    chat_id: int
+    chat_id: int              # the account id (named before accounts existed): whose data this is
     user_id: str = "owner"
     role: str = "owner"  # owner | member: decides which tools exist for this request
     tz: str = OWNER_TIMEZONE  # the user's timezone: "9am" means 9am where they are

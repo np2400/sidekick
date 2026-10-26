@@ -1,6 +1,7 @@
 """SQLite: one file, no server. Connections are opened per operation (cheap) so threads never share one.
 
-Migrations are numbered .sql files applied once, in order, and recorded in schema_version.
+Migrations are numbered .sql files applied once, in order, and recorded in schema_version. Each file runs in one
+transaction together with its schema_version row: a migration that fails halfway leaves nothing behind.
 """
 import logging
 import sqlite3
@@ -27,9 +28,9 @@ def init(path: str | Path | None = None) -> Path:
         done = {row[0] for row in conn.execute("SELECT version FROM schema_version")}
         for file in sorted(MIGRATIONS.glob("*.sql")):
             version = int(file.name.split("_", 1)[0])
-            if version not in done:
-                conn.executescript(file.read_text())
-                conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+            if version not in done:  # executescript doesn't open a transaction itself: BEGIN...COMMIT does
+                conn.executescript(f"BEGIN;\n{file.read_text()}\n;"
+                                   f"INSERT INTO schema_version (version) VALUES ({version});\nCOMMIT;")
                 log.info("Applied migration %s", file.name)
     return _path
 
