@@ -91,7 +91,7 @@ docker compose up -d --build
 docker compose exec sidekick python -m app.set_webhook https://<your-domain>
 ```
 
-Ship an update: `git pull && docker compose up -d --build`. Restore a backup into a test file: `docker compose run --rm litestream restore -o /data/restore-test.db /data/sidekick.db`.
+Ship an update: push to `main`. When CI passes, it moves the `production` branch; a systemd timer on the server (`deploy/deploy.py`) pulls it within 5 minutes, rebuilds, checks `/health`, rolls back automatically if Sidekick doesn't come up, and reports on Telegram. The server only pulls, so GitHub holds no server credentials. (By hand: `git pull && docker compose up -d --build`.) Restore a backup into a test file: `docker compose run --rm litestream restore -o /data/restore-test.db /data/sidekick.db`.
 
 On a laptop, `docker compose up -d` starts only Sidekick; Caddy and Litestream run when `COMPOSE_PROFILES=public`.
 

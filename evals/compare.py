@@ -17,9 +17,12 @@ MAX_DROP = 5.0  # percentage points; small wobble is normal for non-deterministi
 
 
 def case_pass_rates(report: dict) -> dict:
-    """{model: {case: fraction of repeats passed}} from a report's raw runs."""
+    """{model: {case: fraction of repeats passed}} from a report's raw runs. Runs where the model was unavailable
+    (quota, outage) are skipped: "the provider said no" says nothing about the model's quality."""
     runs = defaultdict(lambda: defaultdict(list))
     for r in report["runs"]:
+        if r.get("record", {}).get("unavailable"):
+            continue
         runs[r["model"]][r["case"]].append(r["score"]["passed"])
     return {m: {c: sum(v) / len(v) for c, v in cases.items()} for m, cases in runs.items()}
 
@@ -66,10 +69,15 @@ def main(argv=None) -> int:
 
     report = json.loads(Path(args.report).read_text())
     if args.save:
-        Path(args.baseline).write_text(json.dumps(
-            {"from_report": Path(args.report).name, "meta": report["meta"],
-             "case_pass_rates": case_pass_rates(report)}, indent=1))
-        print(f"Saved {args.baseline} from {Path(args.report).name}")
+        path = Path(args.baseline)
+        saved = json.loads(path.read_text()) if path.exists() else {}
+        # Per model: this report replaces the models it ran and keeps the others, so text cases (gpt-oss) and
+        # photo cases (a vision model) can come from separate runs.
+        rates = {**saved.get("case_pass_rates", {}), **case_pass_rates(report)}
+        sources = {**saved.get("from_reports", {}), **{m: Path(args.report).name for m in case_pass_rates(report)}}
+        path.write_text(json.dumps({"from_reports": sources, "meta": report["meta"], "case_pass_rates": rates},
+                                   indent=1))
+        print(f"Saved {args.baseline}: updated {sorted(case_pass_rates(report))} from {Path(args.report).name}")
         return 0
     if not Path(args.baseline).exists():
         print("No baseline yet. Accept a good run with: python -m evals.compare <report.json> --save")

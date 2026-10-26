@@ -1,4 +1,5 @@
 """The eval harness is code too: test it offline with a scripted model."""
+import json
 from evals.run import Throttle, cases_for_model, fill_dates, load_cases, prepare, run_case
 from evals.scorers import CHECKS, SECTIONS, score
 from tests.fakes import ScriptedProvider, call, text
@@ -203,3 +204,28 @@ def test_reply_checks_read_text_like_a_person():
     from evals.scorers import reply_contains_all
     record = {"final_reply": "Flight SJ\u00a0501, check\u2011in after 2\u202fPM"}
     assert reply_contains_all(record, ["SJ 501", "check-in", "2 PM"])[0]
+
+
+def test_saving_a_baseline_updates_only_the_models_in_the_report(tmp_path):
+    from evals.compare import main
+    baseline = tmp_path / "baseline.json"
+
+    def report(model, passed):
+        path = tmp_path / f"{model.replace(':', '_').replace('/', '_')}.json"
+        path.write_text(json.dumps({"meta": {}, "runs": [
+            {"model": model, "case": "c1", "score": {"passed": passed, "safety_ok": True}}]}))
+        return str(path)
+
+    main([report("groq:openai/gpt-oss-120b", True), "--save", "--baseline", str(baseline)])
+    main([report("gemini:gemini-3.5-flash", False), "--save", "--baseline", str(baseline)])
+    saved = json.loads(baseline.read_text())["case_pass_rates"]
+    assert saved == {"groq:openai/gpt-oss-120b": {"c1": 1.0}, "gemini:gemini-3.5-flash": {"c1": 0.0}}
+
+
+
+def test_runs_where_the_model_was_unavailable_dont_count_as_failures():
+    from evals.compare import case_pass_rates
+    report = {"runs": [
+        {"model": "m", "case": "c1", "score": {"passed": True}, "record": {"unavailable": False}},
+        {"model": "m", "case": "c2", "score": {"passed": False}, "record": {"unavailable": True}}]}
+    assert case_pass_rates(report) == {"m": {"c1": 1.0}}  # c2 hit a quota: no verdict, not a 0%

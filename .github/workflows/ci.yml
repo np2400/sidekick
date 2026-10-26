@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: "Lint for real bugs (undefined or unused names, syntax errors)"
-        run: ruff check app evals tests
+        run: ruff check app evals tests deploy
       - name: "Offline tests (FakeWorld, scripted model, network blocked)"
         run: pytest -q
 
@@ -39,3 +39,17 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Only a commit that passed both jobs above is marked deployable. The server polls the `production` branch
+  # (deploy/deploy.py) and deploys it, so nothing in GitHub needs access to the server.
+  promote:
+    name: Mark as deployable
+    needs: [tests, secrets]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # to move the production branch; nothing else
+    steps:
+      - uses: actions/checkout@v4
+      - name: "Move production to this commit"
+        run: git push origin "HEAD:refs/heads/production" --force

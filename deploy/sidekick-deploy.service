@@ -1,0 +1,13 @@
+# Runs deploy/deploy.py once. Started every 5 minutes by sidekick-deploy.timer.
+# Install: sudo cp deploy/sidekick-deploy.* /etc/systemd/system/ && sudo systemctl daemon-reload
+#          && sudo systemctl enable --now sidekick-deploy.timer        Logs: journalctl -u sidekick-deploy
+[Unit]
+Description=Sidekick: deploy the latest tested commit (the production branch)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/sidekick
+ExecStart=/usr/bin/python3 /home/ubuntu/sidekick/deploy/deploy.py

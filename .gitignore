@@ -21,3 +21,6 @@ data/
 # Private keys (e.g. an AWS .pem) must never be committed
 *.pem
 *.key
+
+# Server-side deploy state: a commit that failed its health check (deploy/deploy.py)
+.deploy-failed

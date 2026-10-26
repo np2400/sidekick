@@ -1,0 +1,9 @@
+[Unit]
+Description=Sidekick: check for a new tested version every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
