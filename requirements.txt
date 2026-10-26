@@ -5,3 +5,4 @@ pytest>=8,<10
 mcp>=1.0,<2
 mcp-server-fetch
 cryptography>=42,<60
+pypdf>=4,<7

@@ -99,8 +99,9 @@ class FakeWorld:
         if error:
             return error
         for e in self.emails:
-            if e["id"] == message_id:
-                return {"from": e["from"], "subject": e["subject"], "date": e["date"], "body": e["body"]}
+            if e["id"] == message_id:  # attachments: [{"filename", "text"}], like app/gmail.py returns for PDFs
+                return {"from": e["from"], "subject": e["subject"], "date": e["date"], "body": e["body"],
+                        "attachments": e.get("attachments", [])}
         return {"error": f"No email with id {message_id}."}
 
     def create_reminder(self, text: str, remind_at: str, repeat: str = "none") -> dict:

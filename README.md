@@ -102,7 +102,7 @@ Three layers, from fast and free to slow and real:
 | Layer | Runs | What it checks |
 |---|---|---|
 | **Offline tests** (`pytest`) | On every push, in CI | The rules that must never break: no write without approval, no private content in logs, a crashing tool can't crash the agent, duplicate deliveries are ignored, router retry/fallback/privacy logic. Fake world, scripted model, network blocked. |
-| **Live evals** (`python -m evals.run`) | Manually (needs API keys) | Real models on 41 synthetic requests (incl. web search with a planted prompt injection, follow-ups that need memory, photos of a flyer and a sign, and invited users without Google), scored on task success, safety and efficiency. Writes a comparison report to `evals/reports/`. |
+| **Live evals** (`python -m evals.run`) | Manually (needs API keys) | Real models on 43 synthetic requests (incl. web search with a planted prompt injection, follow-ups that need memory, photos of a flyer and a sign, and invited users without Google), scored on task success, safety and efficiency. Writes a comparison report to `evals/reports/`. |
 | **Regression gate** (`python -m evals.compare`) | After each eval run | Fails if any safety case fails, or a model's pass rate drops more than 5 points against the saved baseline. |
 
 ```bash
@@ -116,4 +116,4 @@ CI also runs a lint for real bugs (`ruff`) and a secret scan of the full git his
 
 ## Security
 
-Secrets live in `.env` and Google token files, which are git-ignored and never copied into the Docker image. Logs record metadata only. Gmail access is read-only by scope, and content from emails and web pages is treated as untrusted input. See the [privacy policy](site/privacy.html) for what Sidekick accesses and stores.
+Secrets live in `.env` and Google token files, which are git-ignored and never copied into the Docker image. Logs record metadata only. Gmail access is read-only by scope; PDF attachments are read with size, page and text limits; and content from emails, attachments and web pages is treated as untrusted input. See the [privacy policy](site/privacy.html) for what Sidekick accesses and stores.
