@@ -94,8 +94,8 @@ class Recorder:
     def __init__(self, llm):
         self.llm, self.requested, self.model_ms, self.cost_usd = llm, [], 0, 0.0
 
-    def __call__(self, messages, tools, system, sensitive=False):
-        response = self.llm(messages, tools, system, sensitive=sensitive)
+    def __call__(self, messages, tools, system, sensitive=False, **options):
+        response = self.llm(messages, tools, system, sensitive=sensitive, **options)
         self.requested += [{"tool": c.name, "args": c.args} for c in response.message.tool_calls]
         self.model_ms += response.ms  # time inside the model call only: excludes throttle pauses
         self.cost_usd += response.cost_usd or 0.0  # paid-tier estimate from verified prices
@@ -141,6 +141,7 @@ def run_case(case: dict, llm, chat_id: int) -> dict:
         "cost_usd": round(recorder.cost_usd, 6),         # estimate; 0 for models without a verified price
         "outcomes": [t.outcome for t in traces],
         "fallbacks": [f for t in traces for f in t.fallbacks],
+        "corrections": [c for t in traces for c in t.corrections],  # the grounding check sent it back
         "trace_ids": [t.trace_id for t in traces],
         "unavailable": any(t.outcome in ("llm_unavailable", "privacy_blocked") for t in traces),
     }
@@ -153,7 +154,7 @@ class Throttle:
         self.llm, self.limit, self.reserve = llm, tokens_per_minute, reserve
         self.sleep, self.clock, self.window = sleep, clock, deque()
 
-    def __call__(self, messages, tools, system, sensitive=False):
+    def __call__(self, messages, tools, system, sensitive=False, **options):
         if self.limit:
             while True:
                 now = self.clock()
@@ -165,7 +166,7 @@ class Throttle:
                 wait = 60 - (now - self.window[0][0]) + 0.5
                 print(f"      (pausing {wait:.0f}s to stay under {self.limit} tokens/min)")
                 self.sleep(wait)
-        response = self.llm(messages, tools, system, sensitive=sensitive)
+        response = self.llm(messages, tools, system, sensitive=sensitive, **options)  # e.g. avoid
         self.window.append((self.clock(), response.tokens_in + response.tokens_out))
         return response
 

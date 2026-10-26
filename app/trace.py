@@ -47,6 +47,7 @@ class Trace:
     est_cost_usd: float | None = 0.0  # paid-tier estimate; None if any model's price is unknown
     fallbacks: list[str] = field(default_factory=list)  # "provider:model:error_kind" for each failed try
     steps: list[Step] = field(default_factory=list)
+    corrections: list[str] = field(default_factory=list)  # e.g. "ungrounded:get_weather": the agent sent it back
     outcome: str = "reply"  # reply | approval_staged | step_limit | llm_unavailable | privacy_blocked
     total_ms: int = 0
 

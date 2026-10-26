@@ -6,9 +6,14 @@ import httpx
 import pytest
 
 from app import weather
-from app.agent import MEMBER_REGISTRIES, SYSTEM_PROMPT, TOOLS, system_prompt, tool_specs
+from app.agent import (MEMBER_REGISTRIES, SYSTEM_PROMPT, TOOLS, UNGROUNDED_REPLY, run_agent, system_prompt,
+                       tool_specs)
+from app.llm.router import Candidate, Router
+from app.llm.types import LLMResponse, Message, ToolCall
+from app.trace import ToolContext
 from evals.scorers import reply_contains_none
 from evals.world import FakeWorld
+from tests.fakes import ScriptedProvider, call, text
 
 SEATTLE = {"results": [{"name": "Seattle", "admin1": "Washington", "country": "United States", "country_code": "US",
                         "latitude": 47.6, "longitude": -122.33, "timezone": "America/Los_Angeles"}]}
@@ -142,3 +147,79 @@ def test_a_reply_that_cites_a_betting_market_fails_the_safety_check():
     ok, reason = reply_contains_none({"final_reply": "Highs near 54°F (Polymarket odds)."}, ["polymarket"])
     assert not ok and "polymarket" in reason
     assert reply_contains_none({"final_reply": "High 52°F, low 44°F (Open-Meteo)."}, ["polymarket"])[0]
+
+
+# --- Grounding: a reply may name Open-Meteo only if get_weather ran for this message ----------------------------
+
+NOME = {"place": "Nome, Alaska, United States", "start": "2026-10-26", "alerts": [],
+        "alerts_source": "US National Weather Service",
+        "days": [{"high_f": 41, "low_f": 39, "rain_chance_pct": 100, "conditions": "drizzle"}]}
+EARLIER = [Message(role="user", text="Whats the weather in pune tomorrow?"),
+           Message(role="assistant", text="Pune tomorrow (Tue 27 Oct): high 32°C / low 21°C, overcast, no rain "
+                                          "expected (0% chance). (Forecast: Open-Meteo)")]
+INVENTED = "Nome, AK today (Fri 7 Nov): high 28°F / low 19°F, overcast, no rain (4% chance). (Forecast: Open-Meteo)"
+
+
+def test_a_forecast_that_cites_open_meteo_without_asking_it_is_sent_back_and_redone():
+    """Regression (Oct 26): the fallback model skipped get_weather, copied the earlier answer's style, made it up."""
+    world = FakeWorld(weather=NOME)
+    llm = ScriptedProvider([text(INVENTED)], [call("get_weather", place="Nome, Alaska")],
+                           [text("Nome today: drizzle, high 41°F / low 39°F. (Forecast: Open-Meteo)")])
+    result = run_agent("Whats the weather in nome ,Alaska", ToolContext(chat_id=1), llm=llm, tools=world.tools(),
+                       history=EARLIER)
+    assert result.reply.startswith("Nome today: drizzle, high 41°F") and world.created("get_weather") == 1
+    assert result.trace.corrections == ["ungrounded:get_weather"]
+    assert "get_weather wasn't called" in llm.received[1][-1].text  # the model was told why
+
+
+@pytest.mark.parametrize("second_try", [INVENTED, "Nome today: high 28°F, overcast."])  # same, or source dropped
+def test_a_model_that_still_wont_ask_gets_an_honest_reply_not_invented_numbers(second_try):
+    world = FakeWorld(weather=NOME)
+    llm = ScriptedProvider([text(INVENTED)], [text(second_try)])
+    result = run_agent("Whats the weather in nome ,Alaska", ToolContext(chat_id=1), llm=llm, tools=world.tools(),
+                       history=EARLIER)
+    assert result.reply == UNGROUNDED_REPLY["get_weather"] and "28" not in result.reply
+    assert world.created("get_weather") == 0
+
+
+@pytest.mark.parametrize("turns", [
+    [[call("get_weather", place="Nome")], [text("Drizzle, 41°F. (Forecast: Open-Meteo)")]],  # a real forecast
+    [[text("20°C is 68°F.")]],                                                               # no source named
+])
+def test_real_forecasts_and_other_answers_pass_untouched(turns):
+    world = FakeWorld(weather=NOME)
+    result = run_agent("question", ToolContext(chat_id=1), llm=ScriptedProvider(*turns), tools=world.tools())
+    assert result.trace.corrections == [] and result.reply == turns[-1][0]["text"]
+
+
+class ScriptedAdapter:
+    """A provider whose model follows a script (text or tool calls), so a real Router can be tested end to end."""
+
+    def __init__(self, name, *turns):
+        self.name, self.turns, self.seen = name, list(turns), []
+
+    def complete(self, model, messages, tools, system, timeout):
+        self.seen.append(list(messages))
+        turn = self.turns.pop(0)
+        calls = [ToolCall(id=f"{self.name}-{i}", name=p["functionCall"]["name"], args=p["functionCall"]["args"])
+                 for i, p in enumerate(turn) if "functionCall" in p]
+        said = "".join(p.get("text", "") for p in turn)
+        return LLMResponse(Message(role="assistant", text=said, tool_calls=calls, provider=self.name), self.name,
+                           model, tokens_in=10, tokens_out=10)
+
+
+def test_a_model_that_ignores_its_tools_twice_hands_the_message_to_the_next_model():
+    """What should have happened on Oct 26: Qwen won't call get_weather, so Gemini answers, from real data."""
+    qwen = ScriptedAdapter("groq", [text(INVENTED)], [text(INVENTED)])
+    gemini = ScriptedAdapter("gemini", [call("get_weather", place="Nome, Alaska")],
+                             [text("Nome today: drizzle, high 41°F / low 39°F. (Forecast: Open-Meteo)")])
+    router = Router([Candidate("groq", "qwen/qwen3.8-27b"), Candidate("gemini", "gemini-3.5-flash")],
+                    {"groq": qwen, "gemini": gemini}, cooldown=0)
+    world = FakeWorld(weather=NOME)
+    result = run_agent("Whats the weather in nome ,Alaska", ToolContext(chat_id=1), llm=router.complete,
+                       tools=world.tools(), history=EARLIER)
+
+    assert result.reply.startswith("Nome today: drizzle, high 41°F") and world.created("get_weather") == 1
+    assert result.trace.corrections == ["ungrounded:get_weather", "escalated:groq:qwen/qwen3.8-27b"]
+    handed_over = " ".join(m.text or "" for m in gemini.seen[0])
+    assert "Fri 7 Nov" not in handed_over and "Check by Sidekick" not in handed_over  # a clean start, not the mess

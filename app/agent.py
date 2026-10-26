@@ -455,12 +455,18 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
     # or remembered messages that came from either.
     sensitive = bool(images) or history_sensitive
     used: dict[str, int] = {}  # tool calls so far in this message, checked against TOOL_BUDGET
+    needed = None              # a tool the model was sent back to call (see ungrounded): once per message
+    restart = 0                # where this message began in `messages`, to hand it to another model cleanly
+    avoid: set[str] = set()    # models that ignored their tools for this message: the router skips them
 
     for step in range(1, MAX_STEPS + 1):
         try:
-            response = llm(messages, specs, system_prompt(tools, ctx.tz), sensitive=sensitive)
+            response = llm(messages, specs, system_prompt(tools, ctx.tz), sensitive=sensitive,
+                           **({"avoid": frozenset(avoid)} if avoid else {}))
         except AllProvidersFailed as exc:
             trace.record_failures(exc.attempts)
+            if avoid:  # no other model to hand it to: honest, not invented
+                return AgentResult(UNGROUNDED_REPLY[needed], trace.finish(), sensitive=sensitive)
             if exc.privacy_blocked:
                 return AgentResult("I can't finish this one: it involves private content (like your email), and "
                                    "the AI models allowed to see it are unavailable right now. Try again later.",
@@ -471,10 +477,22 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
         reply = response.message
         messages.append(reply)  # keep the model's turn in the history (adapters translate it back)
 
-        # No tool requested: the model has its final answer.
+        # No tool requested: the model has its final answer, unless it names a source it never asked.
         if not reply.tool_calls:
-            return AgentResult(plain(reply.text) or "(no reply)", trace.finish(), undo_reminder_id=undo_id,
-                               sensitive=sensitive)
+            # Once sent back, the tool must run: dropping the word "Open-Meteo" doesn't make numbers real.
+            missing = ungrounded(reply.text, used, tools) or (needed if needed and not used.get(needed) else None)
+            if missing and needed is None:  # first time: send it back once
+                needed, restart = missing, len(messages) - 1
+                trace.corrections.append(f"ungrounded:{missing}")
+                messages.append(Message(role="user", text=GROUNDING_NUDGE[missing]))
+                continue
+            if missing and not avoid:  # ignored it twice: the next model gets the message, minus the bad tries
+                avoid.add(f"{response.provider}:{response.model}")
+                trace.corrections.append(f"escalated:{response.provider}:{response.model}")
+                del messages[restart:]
+                continue
+            text = UNGROUNDED_REPLY[missing] if missing else plain(reply.text) or "(no reply)"
+            return AgentResult(text, trace.finish(), undo_reminder_id=undo_id, sensitive=sensitive)
 
         # Model asked for tools: run each, then send the results back on the next loop.
         for call in reply.tool_calls:
@@ -498,8 +516,28 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
 
     # Out of steps. Don't throw away what the tools found: one last call, without tools, writes the answer.
     reply = final_answer(user_text, messages, llm, system_prompt(tools, ctx.tz), sensitive, trace)
+    if reply and (missing := ungrounded(reply, used, tools) or (needed if needed and not used.get(needed) else None)):
+        reply = UNGROUNDED_REPLY[missing]
     return AgentResult(reply or "Sorry, I got stuck in a loop.", trace.finish("step_limit"),
                        undo_reminder_id=undo_id, sensitive=sensitive)
+
+
+# A reply may name a source only if the tool behind it ran for this message. On Oct 26 a fallback model skipped
+# get_weather four times, copied "(Forecast: Open-Meteo)" from earlier answers in the chat and invented the
+# numbers (and a "Friday Nov 7" that doesn't exist). The router can't see that: the model answered, it didn't fail.
+SOURCES = {"open-meteo": "get_weather", "open meteo": "get_weather"}
+GROUNDING_NUDGE = {"get_weather": "(Check by Sidekick, not the user) Your answer names Open-Meteo, but get_weather "
+                                  "wasn't called for this message, so those numbers aren't real. Call get_weather "
+                                  "now and answer only from what it returns."}
+UNGROUNDED_REPLY = {"get_weather": "I couldn't get a real forecast just now, so I won't guess. Please ask again in "
+                                   "a minute."}
+
+
+def ungrounded(reply: str, used: dict, tools: dict) -> str | None:
+    """The tool a reply cites as its source without having called it for this message, or None."""
+    text = (reply or "").lower()
+    return next((tool for name, tool in SOURCES.items() if name in text and tool in tools and not used.get(tool)),
+                None)
 
 
 FINAL_CHARS = 6000  # cap on tool results passed to the last call (Groq's free tier: 8,000 tokens a minute)

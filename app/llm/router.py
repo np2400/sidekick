@@ -78,14 +78,18 @@ class Router:
         self.skip_until: dict[str, float] = {}  # circuit breaker: candidate -> when to try again
 
     def complete(self, messages: list[Message], tools: list[ToolSpec], system: str,
-                 sensitive: bool = False) -> LLMResponse:
+                 sensitive: bool = False, avoid: frozenset[str] = frozenset()) -> LLMResponse:
+        """`avoid`: models (provider:model) not to use for this request, e.g. one that answered but ignored its
+        tools (see app/agent.py, ungrounded). They aren't benched: it's about this request, not their health."""
         has_images = any(m.images for m in messages)
         candidates = self.vision_candidates if has_images and self.vision_candidates else self.candidates
         attempts: list[Attempt] = []
         eligible = []
         for c in (c for c in candidates if c.provider in self.adapters):
             # Record who was excluded and why, so the trace and the user see the real reason.
-            if sensitive and not c.allow_sensitive:
+            if c.key in avoid:
+                attempts.append(Attempt(c.key, "avoided"))
+            elif sensitive and not c.allow_sensitive:
                 attempts.append(Attempt(c.key, "privacy_blocked"))
             elif has_images and not c.vision:
                 attempts.append(Attempt(c.key, "no_vision"))

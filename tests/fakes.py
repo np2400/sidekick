@@ -3,6 +3,7 @@
 FakeWorld        = lives in evals/world.py (shared with the live evals), re-exported here.
 ScriptedProvider = a fake LLM that replays pre-written turns, so tests are deterministic and free.
 """
+from app.llm.router import AllProvidersFailed, Attempt
 from app.llm.types import LLMResponse, Message, ToolCall
 from evals.world import FakeWorld  # noqa: F401  (re-exported for tests)
 
@@ -29,7 +30,9 @@ class ScriptedProvider:
         self.received: list[list[Message]] = []  # what the agent sent on each call, for assertions
         self.sensitive_flags: list[bool] = []
 
-    def __call__(self, messages, tools=None, system="", sensitive=False) -> LLMResponse:
+    def __call__(self, messages, tools=None, system="", sensitive=False, avoid=frozenset()) -> LLMResponse:
+        if f"scripted:{self.model}" in avoid:  # a single model: nobody to hand the message to
+            raise AllProvidersFailed([Attempt(f"scripted:{self.model}", "avoided")])
         self.received.append(list(messages))
         self.sensitive_flags.append(sensitive)
         if not self.turns:

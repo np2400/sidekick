@@ -173,3 +173,17 @@ def test_privacy_exclusions_are_recorded_so_the_reason_is_visible():
         router.complete(MSG, [], "sys", sensitive=True)
     assert exc.value.privacy_blocked
     assert ("groq:qwen/qwen3.8-27b", "privacy_blocked") in [(a.candidate, a.kind) for a in exc.value.attempts]
+
+
+def test_a_model_to_avoid_for_one_request_is_passed_over_but_not_benched():
+    gemini, groq = FakeAdapter("gemini"), FakeAdapter("groq")
+    router, _ = make([gemini, groq], [B, A])  # Qwen first, like production
+    response = router.complete(MSG, [], "", avoid=frozenset({B.key}))
+    assert response.provider == "gemini" and groq.calls == [] and response.attempts[0].kind == "avoided"
+    assert router.complete(MSG, [], "").provider == "groq"  # the next request uses Qwen again
+
+
+def test_avoiding_every_model_fails_cleanly():
+    router, _ = make([FakeAdapter("groq")], [B])
+    with pytest.raises(AllProvidersFailed):
+        router.complete(MSG, [], "", avoid=frozenset({B.key}))
