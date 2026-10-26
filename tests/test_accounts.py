@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import account, daily, db, google_web, main, reminders, settings, users
+from app import account, daily, db, google_web, main, reminders, settings, users, vault
 from app.config import DB_PATH
 from app.db.rehearse import rehearse, snapshot
 from app.trace import AgentResult, ToolContext, Trace
@@ -115,7 +115,7 @@ def test_rehearsal_fails_if_a_migration_changes_existing_rows(tmp_path, monkeypa
     path = before_w1(tmp_path, monkeypatch)
     bad = tmp_path / "bad-migrations"
     shutil.copytree(REAL_MIGRATIONS, bad)
-    (bad / "010_bad.sql").write_text("UPDATE reminders SET chat_id = 1 WHERE chat_id = 111;")
+    (bad / "999_bad.sql").write_text("UPDATE reminders SET chat_id = 1 WHERE chat_id = 111;")
     monkeypatch.setattr(db, "MIGRATIONS", bad)
 
     assert rehearse(path, str(OWNER)) is False
@@ -220,8 +220,10 @@ def bot(monkeypatch):
 
 
 def messages_of(account_id: int) -> list[str]:
+    """Everything saved for an account, decrypted (saved history is encrypted at rest since W2)."""
     with db.connect() as conn:
-        return [r[0] for r in conn.execute("SELECT text FROM messages WHERE chat_id = ? ORDER BY id", (account_id,))]
+        return [vault.unlock_text(r[0]) for r in conn.execute(
+            "SELECT text_encrypted FROM chat_messages WHERE account_id = ? ORDER BY id", (account_id,))]
 
 
 def test_data_goes_to_the_account_and_replies_go_to_the_telegram_chat(bot):
@@ -242,7 +244,7 @@ def test_export_is_the_accounts_data_sent_to_its_telegram_chat(bot):
     chat, data = bot["files"][-1]
     assert chat == WEB_TELEGRAM and data["chat_id"] == WEB
     assert data["tables"]["identities"][0]["subject"] == str(WEB_TELEGRAM)
-    assert [m["text"] for m in data["tables"]["messages"]] == ["remember this", "ok: remember this"]
+    assert [m["text"] for m in data["tables"]["chat_messages"]] == ["remember this", "ok: remember this"]
 
 
 def test_reminders_and_the_brief_reach_the_accounts_telegram_chat(bot, monkeypatch):

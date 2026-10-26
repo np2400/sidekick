@@ -7,7 +7,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from app import db, google_web
+from app import db, google_web, vault
 
 log = logging.getLogger("sidekick.account")
 
@@ -15,7 +15,7 @@ PERSONAL = {  # table -> column holding the person's account id (chat_id means a
     "reminders": "chat_id", "tasks": "chat_id", "messages": "chat_id", "action_log": "chat_id",
     "pending_actions": "chat_id", "traces": "chat_id", "settings": "chat_id", "usage": "chat_id",
     "daily_runs": "chat_id", "google_accounts": "chat_id", "oauth_states": "chat_id",
-    "accounts": "id", "identities": "account_id",
+    "accounts": "id", "identities": "account_id", "conversations": "account_id", "chat_messages": "account_id",
     # Legacy, kept for rollback: these hold the Telegram id, which equals the account id for every account
     # born in Telegram (the only kind until W3, when web-born accounts arrive and `users` stops being written).
     "users": "telegram_id", "invites": "used_by",
@@ -23,6 +23,7 @@ PERSONAL = {  # table -> column holding the person's account id (chat_id means a
 # deliveries belong to a reminder (reminder_id), so they go with the person's reminders.
 SECRET_COLUMNS = {"google_accounts": {"token_encrypted"}}  # never exported: the export file is not a vault
 NOT_EXPORTED = {"oauth_states"}                              # sign-ins in progress: short-lived internals
+READABLE = {"conversations": ("title_encrypted", "title"), "chat_messages": ("text_encrypted", "text")}  # your own words
 
 
 def export_data(chat_id: int) -> dict:
@@ -38,6 +39,12 @@ def export_data(chat_id: int) -> dict:
                     row.pop(secret, None)
                 if table == "traces":
                     row["data"] = json.loads(row["data"])
+                if table in READABLE:
+                    locked, name = READABLE[table]
+                    try:
+                        row[name] = vault.unlock_text(row.pop(locked))
+                    except vault.VaultError:
+                        row[name] = "[can't be decrypted]"
             tables[table] = rows
         tables["deliveries"] = [dict(r) for r in conn.execute(
             "SELECT d.* FROM deliveries d JOIN reminders r ON r.id = d.reminder_id WHERE r.chat_id = ?", (chat_id,))]

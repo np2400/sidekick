@@ -9,8 +9,9 @@ os.environ["SIDEKICK_DB"] = os.path.join(tempfile.mkdtemp(), "import-time.db")
 os.environ["SIDEKICK_SCHEDULER"] = "0"  # no background reminder thread during tests (tests call tick() directly)
 
 import pytest  # noqa: E402
+from cryptography.fernet import Fernet  # noqa: E402
 
-from app import agent, db  # noqa: E402
+from app import agent, db, vault  # noqa: E402
 from tests.fakes import FakeWorld
 
 
@@ -25,8 +26,9 @@ def no_network(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def clean_state(monkeypatch, tmp_path):
-    """Every test gets its own empty database, so no state leaks between tests."""
+    """Every test gets its own empty database (and a throwaway encryption key), so no state leaks between tests."""
     db.init(tmp_path / "test.db")
+    monkeypatch.setattr(vault, "SECRETS_KEY", Fernet.generate_key().decode())
     # Borrowed MCP tools would start a subprocess: tests stay hermetic with none.
     monkeypatch.setattr(agent, "discover_mcp_tools", lambda: ({}, []))
 

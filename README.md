@@ -13,7 +13,7 @@ Built from scratch in Python (FastAPI), with no agent framework: a hand-written 
 ## What it does
 
 - **Chat on Telegram:** "What's on my calendar tomorrow?", "When am I meeting Nilesh?" (searches the calendar by name, even with spelling differences), "Add a task to call the dentist", "Summarize Sam's latest email", "/brief".
-- **Short-term memory:** follow-ups like "what is this?" after a photo, or "yes" to an offer, work because the last few messages (past two hours) are sent along. Kept 7 days in SQLite, never photos themselves; `/forget` deletes them.
+- **Conversations:** follow-ups like "what is this?" after a photo, or "yes" to an offer, work because the last few messages of the current conversation are sent along (a 2-hour pause or `/new` starts a new one). Saved history is kept 30 days, encrypted, never photos themselves; `/forget` deletes the current conversation, `/forget all` every one.
 - **Photos:** send a flyer, schedule or screenshot and ask about it, or have it turned into reminders and events. Photos have their own model order (Gemini first: right 5/5 vs Qwen 1/4 on the same photo) and never go to text-only models.
 - **Morning brief:** each user picks a time with `/brieftime` (the owner's defaults to 8:00, members' to off) and gets today's plan in their own timezone (`/timezone`), at most once a day even across restarts.
 - **Reminders on Telegram:** "Remind me to call Dad tomorrow at 10", "every weekday at 9am". They arrive with Done, Snooze 1 hour and Tomorrow buttons, and survive restarts.

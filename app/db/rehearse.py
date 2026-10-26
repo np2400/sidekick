@@ -7,8 +7,10 @@ It never touches the given file: it migrates a second copy next to it, checks it
     Sidekick still works on the migrated database, so a code-only rollback is safe
   - one account per person, every login points to an existing account
   - isolation: each account reaches exactly the rows its Telegram user owned before, and no row is shared or lost
+  - saved messages moved into conversations of their own account, word for word, and stored encrypted
   - SQLite's integrity and foreign-key checks pass, and migrating twice changes nothing
 Prints counts and the last 4 digits of ids only, never anything anyone wrote. Exit code 1 if a check fails.
+Without SECRETS_KEY it encrypts the copy with a throwaway key: that proves the round trip without the real key.
 """
 import hashlib
 import os
@@ -17,11 +19,13 @@ import sys
 from contextlib import closing
 from pathlib import Path
 
-from app import db, users
+from cryptography.fernet import Fernet
+
+from app import db, memory, users, vault
 from app.account import PERSONAL
 from app.config import DB_PATH
 
-NEW_TABLES = {"accounts", "identities"}  # added by 009; everything else must come through untouched
+NEW_TABLES = {"accounts", "identities", "conversations", "chat_messages"}  # 009, 010: the rest must not change
 
 
 def open_db(path: Path):
@@ -66,6 +70,18 @@ def mask(person) -> str:
     return f"…{str(person)[-4:]}"
 
 
+def same_message(old, copy) -> bool:
+    """An old-table message and its copy: same account, conversation of that account, same words and flags."""
+    if copy is None or not (copy["account_id"] == copy["owner"] == old["chat_id"]):
+        return False
+    try:
+        words = vault.unlock_text(copy["text_encrypted"])
+    except vault.VaultError:
+        return False
+    return (words, copy["role"], copy["sensitive"], copy["created_at"]) == (
+        old["text"], old["role"], old["sensitive"], old["created_at"])
+
+
 def rehearse(source: Path, owner_telegram_id: str = "") -> bool:
     if source.resolve() == Path(DB_PATH).resolve():
         raise SystemExit("Refusing: that's the live database. Rehearse on a restored copy.")
@@ -90,9 +106,12 @@ def rehearse(source: Path, owner_telegram_id: str = "") -> bool:
         print(f"Copy of {source.name}: schema version {version}, {sum(t['rows'] for t in before.values())} rows "
               f"in {len(before)} tables, newest activity {newest or 'none'} UTC")
 
-        db.init(work)  # the real migrations, exactly as production will run them
+        db.init(work)  # the real migrations, exactly as production will run them, then what startup does
         owner = users.ensure_owner(int(owner_telegram_id)) if owner_telegram_id.isdigit() else None
         check(users.sync_from_legacy(owner_telegram_id) == 0, "accounts agree with the users table at startup")
+        if not vault.SECRETS_KEY:
+            vault.SECRETS_KEY = Fernet.generate_key().decode()
+        memory.import_legacy()
         with open_db(work) as conn:
             after = snapshot(conn)
             changed = [t for t in before if after.get(t) != before[t]]
@@ -134,12 +153,33 @@ def rehearse(source: Path, owner_telegram_id: str = "") -> bool:
             for person, tables in orphans.items():  # unreachable rows of someone without an account: reported only
                 print(f"note  rows that belong to no account ({mask(person)}): {tables}")
 
+            old = conn.execute("SELECT id, chat_id, role, text, sensitive, created_at FROM messages").fetchall()
+            copies = {r["legacy_id"]: r for r in conn.execute(
+                "SELECT m.*, c.account_id AS owner FROM chat_messages m JOIN conversations c "
+                "ON c.id = m.conversation_id WHERE m.legacy_id IS NOT NULL")}
+            moved_wrong = [mask(m["chat_id"]) for m in old  # (rows of nobody stay behind: reported above)
+                           if m["chat_id"] in accounts and not same_message(m, copies.get(m["id"]))]
+            check(not moved_wrong, "every saved message moved into a conversation of its own account, word for word",
+                  f"{len(old)} messages" if not moved_wrong else f"wrong for: {sorted(set(moved_wrong))}")
+            strays = conn.execute("SELECT COUNT(*) FROM chat_messages m LEFT JOIN conversations c ON "
+                                  "c.id = m.conversation_id WHERE c.id IS NULL OR c.account_id != m.account_id"
+                                  ).fetchone()[0]
+            check(not strays, "every message's conversation belongs to the same account")
+            boxes = [r[0] for r in conn.execute("SELECT text_encrypted FROM chat_messages UNION ALL "
+                                                "SELECT title_encrypted FROM conversations WHERE title_encrypted != ''")]
+            check(all(b.startswith("gAAAAA") for b in boxes), "conversations are stored encrypted, nothing readable",
+                  f"{len(boxes)} encrypted texts")
+            check(memory.import_legacy() == 0, "moving messages in again changes nothing")
+
             check(conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok", "SQLite integrity check")
             check(not conn.execute("PRAGMA foreign_key_check").fetchall(), "foreign keys point to existing rows")
 
         db.init(work)  # every restart runs init again: it must change nothing
         with open_db(work) as conn:
             check(snapshot(conn) == after, "migrating a second time changes nothing")
+            for table in ("conversations", "chat_messages"):
+                owned_after[table] = dict(conn.execute(
+                    f"SELECT account_id, COUNT(*) FROM {table} GROUP BY account_id").fetchall())
         for account_id, status in sorted(accounts.items()):
             counts = {t: by[account_id] for t, by in owned_after.items() if by.get(account_id)}
             print(f"      account {mask(account_id)} ({'owner' if account_id == owner else status}): "

@@ -199,9 +199,15 @@ Two different things, kept apart on purpose:
 **Tables:**
 
 ```sql
-conversations (id, account_id, origin, title, created_at, last_message_at)        -- origin: telegram | web
-messages      (+ conversation_id, + channel)    -- existing table: which thread, and where each message was sent
+conversations (id, account_id, origin, title_encrypted, closed, created_at, last_message_at)  -- origin: telegram | web
+chat_messages (id, conversation_id, account_id, role, text_encrypted, sensitive, channel, created_at, legacy_id)
 ```
+
+As built (migration 010):
+- **New tables, nothing changed:** `messages` is left exactly as it was, the same additive approach as W1, so the
+  previous version still runs.
+- **Encrypted:** text and titles are encrypted with the vault key. No key means nothing is saved; nothing is ever
+  stored as plaintext.
 
 **Rules:**
 
@@ -213,14 +219,14 @@ messages      (+ conversation_id, + channel)    -- existing table: which thread,
   - A Telegram message joins the thread of the previous Telegram message if that was under 2 hours ago.
   - Otherwise, or after `/new`, it starts a new thread.
   - This reproduces today's 2-hour memory window exactly, so Telegram behaves the same as now.
-  - `/forget` deletes the current thread.
+  - `/forget` deletes the current thread, and `/forget all` deletes every saved one.
 - **Titles:** the first words of the first message ("Whats the weather in Seattle…", or "Photo"). There's no AI
   call for titles.
 - **Photos and files are never kept in history.** A photo turn is saved as "[sent a photo] caption" plus Sidekick's
   reply, as today. A PDF becomes "[sent a PDF: name]".
-- **Approvals belong to a conversation.** A typed "yes" approves only the proposal in *that* conversation.
-  Approval buttons (in Telegram, the web or the notification center) carry the item id and work from anywhere.
-  Still exactly-once.
+- **Approvals belong to a conversation (W5, when the web has several threads at once).** A typed "yes" approves
+  only the proposal in *that* conversation. Approval buttons (in Telegram, the web or the notification center)
+  carry the item id and work from anywhere. Still exactly-once.
 - **At the account level, shared by all threads:** reminders, tasks, settings, Google connections, notifications
   and, later, long-term personal memory.
 - **Long-term personal memory is a later milestone, not W1 to W7.** It will be an account-level list of facts you
@@ -228,9 +234,13 @@ messages      (+ conversation_id, + channel)    -- existing table: which thread,
 - **Retention:** a daily cleanup in the existing scheduler deletes conversations 30 days after their last message.
   This replaces the 7-day delete.
 
-**Migrating today's Telegram history (no data lost):** each account's existing `messages` rows are grouped into
-conversations wherever there's a 2-hour gap, with `origin = telegram` and titles from the first message. Every row
-gets a `conversation_id`, and none are dropped.
+**Migrating today's Telegram history (no data lost):** at startup, each account's existing `messages` rows are
+copied (encrypted) into conversations, split wherever there's a 2-hour gap, with `origin = telegram` and titles
+from the first message.
+- Each row is copied exactly once (`legacy_id`), and none are dropped.
+- The old table then drains under its old 7-day rule.
+- After a rollback, rows the previous version wrote are copied in at the next start, and deletions it made
+  (`/forget`) are honored.
 - Existing rows stay trimmed at 800 characters; that text is already gone.
 - Anything older than 7 days was already deleted under the current policy.
 
@@ -382,7 +392,7 @@ Each milestone is: build → the owner tries it live → explain → next. Size:
 | #  | Build                                                                                         | You try                                                         | Size |
 |----|-----------------------------------------------------------------------------------------------|-----------------------------------------------------------------|------|
 | W1 | Accounts and identities; ids rewritten (migration 009). Telegram behaves exactly as before.   | Telegram works as usual; `/export` matches the copy from before | M    |
-| W2 | Conversation threads, 30-day full-text history, per-thread memory, approvals per thread; Telegram history migrated (010); privacy policy updated first | Telegram behaves as before; `/new` starts a fresh thread; `/export` shows your threads | M |
+| W2 | Conversation threads, 30-day encrypted history, per-thread memory, `/new` and `/forget all`; Telegram history moved in (010); privacy policy updated first | Telegram behaves as before; `/new` starts a fresh thread; `/export` shows your threads | M |
 | W3 | Google sign-in, sessions, `/web` linking; read-only web: **your real history (including Telegram threads)**, reminders, tasks, connections. Deployed invite-only to the real domain | Sign in on your phone, see your own Telegram conversations; your dad sees only his | L |
 | W4 | Durable jobs; Telegram moves onto the queue                                                   | Restart the server mid-answer; the reply still arrives          | M    |
 | W5 | **Real web chat:** new chats, continue any thread (including Telegram ones), approvals, photo and PDF upload | A real conversation on the web, continued from a Telegram thread, approved on the web | L |
@@ -405,7 +415,7 @@ owner's Google sign-in onto the per-account flow, renaming `chat_id` to `account
 | Risk | Mitigation |
 |------|------------|
 | **The W1 migration touches everyone's data at once.** | It only adds tables (§18.1). Each migration is one transaction. It's rehearsed on a copy restored from the S3 backup, with an automated check of every existing row and of per-account isolation. |
-| **Auto-deploy rollback restores code, not data.** | W1 is designed so the previous code runs on the migrated database, and the rehearsal proves it. W2 changes `messages`, so it gets the full backup-and-restore procedure. Pause the auto-deploy timer and deploy W1 and W2 by hand while watching. |
+| **Auto-deploy rollback restores code, not data.** | W1 and W2 are both additive, so the previous code runs on the migrated database, and the rehearsal proves it. During a rollback from W2, Sidekick starts the current conversation fresh. Pause the auto-deploy timer and deploy each one by hand while watching. |
 | **History goes from 7 days to 30, in full text** (replies can quote emails). The privacy policy promises 7 days. | Update the privacy policy and tell current users *before* W2 ships; that message needs your approval. The export and deletion controls cover it. Check that the server disk (EBS) is encrypted; S3 backups already are. |
 | **Telegram splitting into threads** could cut a conversation in an odd place. | It uses the same 2-hour rule as today's memory, so the model sees exactly what it sees now. `/new` gives an explicit break. |
 | **At-least-once jobs** could repeat a side effect. | Idempotency keys (the job id) on replies, Telegram sends and reminder creation, plus one job per account at a time. A test kills a job mid-run and checks that nothing doubles. |

@@ -27,13 +27,16 @@ log = logging.getLogger("sidekick")
 db.init()  # create or upgrade the SQLite schema before handling any request
 if synced := users.sync_from_legacy(TELEGRAM_OWNER_ID):  # only after a rollback to the previous version
     log.warning("Accounts updated from the users table: %d changes made by the previous version", synced)
+if TELEGRAM_OWNER_ID.isdigit():
+    users.ensure_owner(int(TELEGRAM_OWNER_ID))  # before the import below, so the owner's messages have an account
+memory.import_legacy()  # once after W2 (and after a rollback): earlier messages become conversations
 
 
 
 @asynccontextmanager
 async def lifespan(_app):
     """Start the reminder scheduler with the server, stop it on shutdown."""
-    scheduler = reminders.Scheduler(send_to_account, jobs=[daily.tick]) if SCHEDULER_ENABLED else None
+    scheduler = reminders.Scheduler(send_to_account, jobs=[daily.tick, memory.expire]) if SCHEDULER_ENABLED else None
     _app.state.scheduler = scheduler  # /health checks it
     if scheduler:
         scheduler.start()
@@ -175,6 +178,13 @@ def telegram_webhook(
     elif command == "/forget":
         n = memory.forget(ctx.chat_id)
         reply = f"Done: I forgot our recent conversation ({n} messages)."
+    elif command == "/forget all":
+        n = memory.forget_all(ctx.chat_id)
+        reply = f"Done: I deleted all your saved conversations ({n} messages)."
+    elif command == "/new":
+        memory.new_conversation(ctx.chat_id)
+        reply = ("New conversation started: I won't use our earlier messages as context. They stay in your "
+                 "history for 30 days; /forget all deletes them.")
     elif command.startswith("/start"):
         reply = WELCOME
     elif command == "/invite":
@@ -209,7 +219,9 @@ HELP = ("Just write to me, or send a photo with a question in the caption. Comma
         "/brief - today's plan  ·  /reminders - upcoming reminders  ·  /history - what I did recently\n"
         "/timezone, /brieftime - your timezone and morning summary\n"
         "/connect, /connect gmail, /disconnect - your Google Calendar and Gmail (read-only)\n"
-        "/forget - clear our recent conversation  ·  /export - all your data as a file  ·  /delete_me - erase it")
+        "/new - start a fresh conversation  ·  /forget - delete this conversation  ·  /forget all - delete all "
+        "saved conversations\n"
+        "/export - all your data as a file  ·  /delete_me - erase it")
 OWNER_HELP = "\nOwner: /invite - invite link  ·  /users - members  ·  /remove NAME [delete] - end access"
 
 

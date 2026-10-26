@@ -35,6 +35,8 @@ def fill(chat_id: int, name: str) -> None:
     settings.set_timezone(chat_id, "Asia/Kolkata")
     settings.count_request(chat_id, "Asia/Kolkata")
     with db.connect() as conn:
+        conn.execute("INSERT INTO messages (chat_id, role, text) VALUES (?, 'user', ?)",  # saved before W2
+                     (chat_id, f"{name}'s old message"))
         conn.execute("INSERT INTO daily_runs (job, run_date, chat_id) VALUES ('brief', '2026-10-25', ?)", (chat_id,))
         conn.execute("INSERT INTO google_accounts (chat_id, email, scopes, token_encrypted) VALUES (?, ?, '', 'LOCKED')",
                      (chat_id, f"{name.lower()}@gmail.com"))
@@ -68,7 +70,10 @@ def test_export_has_everything_about_you_and_nothing_secret_or_about_anyone_else
     tables = data["tables"]
 
     assert tables["reminders"][0]["text"] == "Sam's reminder" and tables["deliveries"]
-    assert tables["tasks"][0]["title"] == "Sam's task" and tables["messages"][0]["text"] == "Sam says hi"
+    assert tables["tasks"][0]["title"] == "Sam's task" and tables["messages"][0]["text"] == "Sam's old message"
+    assert [m["text"] for m in tables["chat_messages"]] == ["Sam says hi", "hello"]  # readable: it's your own data
+    assert tables["conversations"][0]["title"] == "Sam says hi"
+    assert "text_encrypted" not in json.dumps(data) and "gAAAAA" not in json.dumps(data)
     assert tables["google_accounts"][0]["email"] == "sam@gmail.com"
     assert "token_encrypted" not in tables["google_accounts"][0]         # the token never leaves the vault
     assert "oauth_states" not in tables
