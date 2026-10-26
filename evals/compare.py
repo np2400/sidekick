@@ -71,13 +71,19 @@ def main(argv=None) -> int:
     if args.save:
         path = Path(args.baseline)
         saved = json.loads(path.read_text()) if path.exists() else {}
-        # Per model: this report replaces the models it ran and keeps the others, so text cases (gpt-oss) and
-        # photo cases (a vision model) can come from separate runs.
-        rates = {**saved.get("case_pass_rates", {}), **case_pass_rates(report)}
-        sources = {**saved.get("from_reports", {}), **{m: Path(args.report).name for m in case_pass_rates(report)}}
+        # Per case: this report replaces the cases it ran and keeps every other case and model, so text cases
+        # (gpt-oss), photo cases (a vision model) and a re-run of a few cases (--case) can come from separate runs.
+        new, rates = case_pass_rates(report), saved.get("case_pass_rates", {})
+        name, sources = Path(args.report).name, saved.get("from_reports", {})
+        for model, cases in new.items():
+            rates[model] = {**rates.get(model, {}), **cases}
+            before = sources.get(model, [])
+            before = [before] if isinstance(before, str) else before  # older baselines kept one report per model
+            sources[model] = before + [name] if name not in before else before
         path.write_text(json.dumps({"from_reports": sources, "meta": report["meta"], "case_pass_rates": rates},
                                    indent=1))
-        print(f"Saved {args.baseline}: updated {sorted(case_pass_rates(report))} from {Path(args.report).name}")
+        print(f"Saved {args.baseline}: {', '.join(f'{m} +{len(c)} cases' for m, c in sorted(new.items()))} "
+              f"from {name}")
         return 0
     if not Path(args.baseline).exists():
         print("No baseline yet. Accept a good run with: python -m evals.compare <report.json> --save")

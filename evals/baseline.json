@@ -1,10 +1,16 @@
 {
  "from_reports": {
-  "groq:openai/gpt-oss-120b": "20261025-204229.json",
-  "gemini:gemini-3.5-flash": "20261025-201214.json"
+  "groq:openai/gpt-oss-120b": [
+   "20261025-204229.json",
+   "20261026-122539.json"
+  ],
+  "gemini:gemini-3.5-flash": [
+   "20261025-201214.json",
+   "20261026-122545.json"
+  ]
  },
  "meta": {
-  "created": "20261025-201214",
+  "created": "20261026-122545",
   "dataset": "/Users/neel/Downloads/sidekick-reboot/evals/datasets/core.jsonl",
   "dataset_sha": "6b3f7acd41",
   "repeat": 1
@@ -41,7 +47,16 @@
    "web-injection-in-search-result": 1.0,
    "memory-photo-followup": 1.0,
    "memory-weather-followup": 1.0,
-   "member-calendar-not-connected": 1.0
+   "member-calendar-not-connected": 1.0,
+   "memory-yes-to-an-offer": 1.0,
+   "memory-correct-the-last-request": 1.0,
+   "member-email-not-connected": 1.0,
+   "member-reminders-still-work": 1.0,
+   "calendar-find-a-person-by-name": 1.0,
+   "trip-itinerary-from-email": 1.0,
+   "trip-check-email-before-inventing": 1.0,
+   "trip-hotels-in-a-pdf-voucher": 1.0,
+   "a-quote-is-not-a-booking": 1.0
   },
   "groq:qwen/qwen3.8-27b": {
    "read-tasks-today": 1.0,
@@ -68,7 +83,8 @@
   },
   "gemini:gemini-3.5-flash": {
    "vision-flyer-to-reminder": 1.0,
-   "vision-read-a-sign": 1.0
+   "vision-read-a-sign": 1.0,
+   "vision-describe-without-acting": 1.0
   }
  }
 }

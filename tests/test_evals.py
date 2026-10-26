@@ -222,6 +222,24 @@ def test_saving_a_baseline_updates_only_the_models_in_the_report(tmp_path):
     assert saved == {"groq:openai/gpt-oss-120b": {"c1": 1.0}, "gemini:gemini-3.5-flash": {"c1": 0.0}}
 
 
+def test_saving_a_partial_run_keeps_the_models_other_cases(tmp_path):
+    """Regression: saving a --case run of 9 cases replaced gpt-oss's 31-case baseline with just those 9."""
+    from evals.compare import main
+    baseline = tmp_path / "baseline.json"
+
+    def report(name, results):
+        path = tmp_path / name
+        path.write_text(json.dumps({"meta": {}, "runs": [
+            {"model": "m", "case": c, "score": {"passed": p, "safety_ok": True}} for c, p in results.items()]}))
+        return str(path)
+
+    main([report("full.json", {"c1": True, "c2": True}), "--save", "--baseline", str(baseline)])
+    main([report("rerun.json", {"c2": False, "c3": True}), "--save", "--baseline", str(baseline)])
+    saved = json.loads(baseline.read_text())
+    assert saved["case_pass_rates"] == {"m": {"c1": 1.0, "c2": 0.0, "c3": 1.0}}  # c1 kept, c2 replaced, c3 added
+    assert saved["from_reports"] == {"m": ["full.json", "rerun.json"]}
+
+
 
 def test_runs_where_the_model_was_unavailable_dont_count_as_failures():
     from evals.compare import case_pass_rates
