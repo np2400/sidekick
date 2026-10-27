@@ -31,6 +31,11 @@ def clean_state(monkeypatch, tmp_path):
     monkeypatch.setattr(vault, "SECRETS_KEY", Fernet.generate_key().decode())
     # Borrowed MCP tools would start a subprocess: tests stay hermetic with none.
     monkeypatch.setattr(agent, "discover_mcp_tools", lambda: ({}, []))
+    # No worker threads (what None means to the app), reset for every test: tests just assign app.state.workers.
+    # Not monkeypatch: since pytest 9.2 (Oct 27) it restores only what's in an object's own __dict__, and Starlette's
+    # State keeps its values elsewhere, so it deleted the attribute (twice, when a fixture and a test both set it).
+    from app import main  # here: importing it runs the app's startup, after the database above exists
+    main.app.state.workers = None
 
 
 @pytest.fixture

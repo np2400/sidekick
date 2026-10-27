@@ -134,7 +134,7 @@ class NoThreads:
 def server(monkeypatch, google):
     monkeypatch.setattr(main, "TELEGRAM_WEBHOOK_SECRET", "s")
     monkeypatch.setattr(main, "TELEGRAM_OWNER_ID", str(OWNER))
-    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    main.app.state.workers = NoThreads()
     monkeypatch.setattr(main, "run_agent", lambda text, ctx, **_: AgentResult("ok", Trace().finish()))
     for name in ("answer_button", "remove_buttons"):
         monkeypatch.setattr(main, name, lambda *a, **k: None)

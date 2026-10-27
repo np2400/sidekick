@@ -117,7 +117,7 @@ def test_continuing_a_telegram_conversation_on_the_web_uses_its_memory_and_teleg
 
 
 def test_a_waiting_message_shows_after_a_reload_until_it_is_answered(web, monkeypatch):
-    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    main.app.state.workers = NoThreads()
     me = web["browser"](OWNER)
     sent = new_chat(me, "slow question")
     page = me.get(f"/api/conversations/{sent['conversation_id']}").json()
@@ -129,7 +129,7 @@ def test_a_waiting_message_shows_after_a_reload_until_it_is_answered(web, monkey
 
 
 def test_sending_the_same_message_twice_queues_it_once(web, monkeypatch):
-    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    main.app.state.workers = NoThreads()
     me = web["browser"](OWNER)
     first, again = new_chat(me, "only once"), new_chat(me, "only once")  # e.g. resent after the network dropped
     assert first == again and count("jobs") == 1 and count("conversations", "origin = 'web'") == 1
@@ -140,7 +140,7 @@ def test_sending_the_same_message_twice_queues_it_once(web, monkeypatch):
 
 
 def test_a_message_given_up_on_still_shows_with_please_send_it_again(web, monkeypatch):
-    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    main.app.state.workers = NoThreads()
     me = web["browser"](OWNER)
     sent = new_chat(me, "crash")
     for _ in range(jobs.MAX_ATTEMPTS + 1):
@@ -168,7 +168,7 @@ def test_even_a_models_down_reply_is_shown_on_the_web(web):
 
 
 def test_a_web_chat_waiting_for_its_answer_survives_forget_in_telegram(web, monkeypatch):
-    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    main.app.state.workers = NoThreads()
     me = web["browser"](OWNER)
     sent = new_chat(me, "still here?")
     memory.forget(OWNER)  # /forget in Telegram deletes the Telegram thread, not the web chat still being answered
@@ -203,7 +203,7 @@ def test_no_one_can_write_into_or_watch_someone_elses_conversation(web):
 
 
 def test_a_member_removed_while_their_message_waited_gets_no_answer(web, monkeypatch):
-    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    main.app.state.workers = NoThreads()
     monkeypatch.setattr(account.google_web, "disconnect", lambda account_id: True)
     dad = web["browser"](DAD)
     sent = send(dad, telegram_conversation(DAD), "hello?").json()
@@ -388,7 +388,7 @@ def test_unreadable_pdfs_get_an_honest_reply_without_asking_the_model(web):
 
 
 def test_a_waiting_file_is_encrypted_survives_a_crash_and_isnt_swept_while_its_message_waits(web, monkeypatch):
-    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    main.app.state.workers = NoThreads()
     me = web["browser"](OWNER)
     sent = new_chat_with(me, attach("IMG_1.jpg", PHOTO), "read this").json()
     [held] = waiting_files()
@@ -414,7 +414,7 @@ def test_a_waiting_file_is_encrypted_survives_a_crash_and_isnt_swept_while_its_m
 
 
 def test_sending_a_file_twice_stores_it_once(web, monkeypatch):
-    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    main.app.state.workers = NoThreads()
     me = web["browser"](OWNER)
     first = new_chat_with(me, attach("IMG_1.jpg", PHOTO)).json()
     again = new_chat_with(me, attach("IMG_1.jpg", PHOTO)).json()
@@ -427,7 +427,7 @@ def test_sending_a_file_twice_stores_it_once(web, monkeypatch):
 
 def test_two_identical_sends_at_the_same_instant_keep_one_file(web, monkeypatch):
     """Both passed the "sent before?" check before either was queued: the second one's file is dropped."""
-    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    main.app.state.workers = NoThreads()
     message = web_api.NewMessage(text="", request_id="request-0400", attachment=attach("IMG_1.jpg", PHOTO))
     thread = telegram_conversation(OWNER)
     first = web_api._queue(OWNER, "web:111:request-0400", thread, message, PHOTO)
@@ -436,7 +436,7 @@ def test_two_identical_sends_at_the_same_instant_keep_one_file(web, monkeypatch)
 
 
 def test_a_file_whose_message_was_given_up_on_or_not_answered_is_deleted_too(web, monkeypatch):
-    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    main.app.state.workers = NoThreads()
     monkeypatch.setattr(account.google_web, "disconnect", lambda account_id: True)
     me, dad = web["browser"](OWNER), web["browser"](DAD)
     sent = new_chat_with(me, attach("IMG_1.jpg", PHOTO), "crash").json()

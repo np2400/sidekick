@@ -28,7 +28,7 @@ class NoThreads:
 def server(monkeypatch):
     monkeypatch.setattr(main, "TELEGRAM_WEBHOOK_SECRET", "s")
     monkeypatch.setattr(main, "TELEGRAM_OWNER_ID", str(OWNER))
-    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    main.app.state.workers = NoThreads()
     sent = []
     monkeypatch.setattr(main, "send_message", lambda chat, text, buttons=None: sent.append((chat, text, buttons))
                         or {"ok": True})
@@ -193,7 +193,7 @@ def test_a_member_removed_while_their_message_waited_gets_no_answer(server, monk
 def test_health_fails_when_the_workers_stop_so_a_bad_deploy_rolls_back(server, monkeypatch):
     workers = jobs.Workers(main.handle_telegram_job, main.deliver_telegram, count=1)
     assert workers.healthy() is False  # never started: no thread alive
-    monkeypatch.setattr(main.app.state, "workers", workers, raising=False)
+    main.app.state.workers = workers
     assert TestClient(main.app).get("/health").status_code == 503
 
 
@@ -217,7 +217,7 @@ def test_a_worker_that_cant_read_the_queue_stops_counting_as_alive(server, monke
 
 def test_the_deep_health_check_sends_a_test_job_through_the_real_workers(server, monkeypatch):
     workers = jobs.Workers(main.handle_telegram_job, main.deliver_telegram, count=1, idle=0.05)
-    monkeypatch.setattr(main.app.state, "workers", workers, raising=False)
+    main.app.state.workers = workers
     workers.start()
     try:
         assert TestClient(main.app).get("/health/deep").json() == {"status": "ok"}
@@ -230,7 +230,7 @@ def test_the_deep_health_check_fails_when_workers_live_but_cant_process(server, 
     monkeypatch.setattr(jobs, "CANARY_SECONDS", 0.5)
     monkeypatch.setattr(jobs, "claim", lambda: None)  # threads alive and "beating", yet no job is ever taken
     workers = jobs.Workers(main.handle_telegram_job, main.deliver_telegram, count=1, idle=0.05)
-    monkeypatch.setattr(main.app.state, "workers", workers, raising=False)
+    main.app.state.workers = workers
     workers.start()
     try:
         client = TestClient(main.app)
