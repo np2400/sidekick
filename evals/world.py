@@ -13,13 +13,14 @@ CRASHES = {"ReadTimeout": httpx.ReadTimeout, "ConnectError": httpx.ConnectError}
 class FakeWorld:
     """In-memory accounts. Every tool call is recorded in `self.calls`."""
 
-    def __init__(self, tasks=None, events=None, emails=None, reminders=None, web=None, weather=None):
+    def __init__(self, tasks=None, events=None, emails=None, reminders=None, web=None, weather=None, pages=None):
         self.tasks = list(tasks or [])
         self.events = list(events or [])
         self.emails = list(emails or [])
         self.reminders = list(reminders or [])  # dicts: id, text, next, repeat
         self.web = list(web or [])              # search results: dicts with title, url, snippet
         self.weather = weather or {}            # place, start (a date), days: one dict per day from start
+        self.pages = dict(pages or {})          # url -> page text, for web_fetch
         self.calls: list[tuple[str, dict]] = []
         self.failures: dict[str, object] = {}  # tool name -> error dict to return, or Exception to raise
 
@@ -53,6 +54,7 @@ class FakeWorld:
             "cancel_reminder": self.cancel_reminder,
             "web_search": self.web_search,
             "get_weather": self.get_weather,
+            "web_fetch": self.web_fetch,
         }
 
     def get_current_time(self, timezone: str = "America/Los_Angeles") -> dict:
@@ -131,6 +133,14 @@ class FakeWorld:
         return self._enter("web_search", {"query": query, "recent": recent}) or {
             "query": query, "results": self.web[:max_results]}
 
+    def web_fetch(self, url: str, max_length: int = 4000, start_index: int = 0, raw: bool = False) -> dict:
+        """Same shape as the Fetch MCP server's answer in production: {"content": text} or an error."""
+        error = self._enter("web_fetch", {"url": url})
+        if error:
+            return error
+        page = self.pages.get(url) or self.pages.get(url.rstrip("/"))
+        return {"content": page[:max_length]} if page else {"error": f"Failed to fetch {url}: status code 404"}
+
     def get_weather(self, place: str, days: int = 3) -> dict:
         """Same shape as app/weather.py: the canned forecast, whatever the place (cases check the place)."""
         error = self._enter("get_weather", {"place": place, "days": days})
@@ -149,7 +159,8 @@ class FakeWorld:
     def from_seed(cls, seed: dict) -> "FakeWorld":
         """Build a world from a dataset case's `world` field (JSON-friendly)."""
         world = cls(tasks=seed.get("tasks"), events=seed.get("events"), emails=seed.get("emails"),
-                    reminders=seed.get("reminders"), web=seed.get("web"), weather=seed.get("weather"))
+                    reminders=seed.get("reminders"), web=seed.get("web"), weather=seed.get("weather"),
+                    pages=seed.get("pages"))
         for tool, failure in (seed.get("fail") or {}).items():
             if "raise" in failure:  # {"raise": "ReadTimeout"} -> the tool crashes with that exception
                 world.fail(tool, CRASHES[failure["raise"]](f"simulated {failure['raise']}"))

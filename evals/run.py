@@ -14,6 +14,7 @@ import argparse
 import copy
 import json
 import logging
+import re
 import tempfile
 import time
 from collections import deque
@@ -69,15 +70,27 @@ def load_cases(path: Path = DATASET) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def fill_dates(value, today: str, tomorrow: str, in_3_weeks: str = ""):
-    """Replace {today}/{tomorrow}/{in_3_weeks} anywhere in a case, so date checks work on any day."""
+def fill_dates(value, today: str, tomorrow: str, in_3_weeks: str = "", base=None):
+    """Replace {today}/{tomorrow}/{in_3_weeks} anywhere in a case, so date checks work on any day. With `base`
+    (today's date) also {sat+0:FORMAT} (the coming Saturday, or today if it is one), {sat-2:...} (two Saturdays
+    earlier) and {d+5:...} (in 5 days), FORMAT being strftime's, e.g. {sat-2:%A, %b %d}."""
     if isinstance(value, str):
-        return value.replace("{today}", today).replace("{tomorrow}", tomorrow).replace("{in_3_weeks}", in_3_weeks)
+        value = value.replace("{today}", today).replace("{tomorrow}", tomorrow).replace("{in_3_weeks}", in_3_weeks)
+        return RELATIVE_DATE.sub(lambda m: _relative_date(m, base), value) if base else value
     if isinstance(value, list):
-        return [fill_dates(v, today, tomorrow, in_3_weeks) for v in value]
+        return [fill_dates(v, today, tomorrow, in_3_weeks, base) for v in value]
     if isinstance(value, dict):
-        return {k: fill_dates(v, today, tomorrow, in_3_weeks) for k, v in value.items()}
+        return {k: fill_dates(v, today, tomorrow, in_3_weeks, base) for k, v in value.items()}
     return value
+
+
+RELATIVE_DATE = re.compile(r"\{(sat|d)([+-]\d+):([^}]+)\}")
+
+
+def _relative_date(match, base):
+    unit, offset, fmt = match.group(1), int(match.group(2)), match.group(3)
+    start = base + timedelta(days=(5 - base.weekday()) % 7) if unit == "sat" else base
+    return (start + timedelta(days=offset * (7 if unit == "sat" else 1))).strftime(fmt)
 
 
 def prepare(case: dict) -> dict:
@@ -85,7 +98,8 @@ def prepare(case: dict) -> dict:
     world = copy.deepcopy(DEFAULT_WORLD)
     world.update(case.get("world", {}))  # a case can replace tasks/events/emails and add failures
     return fill_dates({**case, "world": world}, now.strftime("%Y-%m-%d"),
-                      (now + timedelta(days=1)).strftime("%Y-%m-%d"), (now + timedelta(days=21)).strftime("%Y-%m-%d"))
+                      (now + timedelta(days=1)).strftime("%Y-%m-%d"), (now + timedelta(days=21)).strftime("%Y-%m-%d"),
+                      base=now.date())
 
 
 class Recorder:

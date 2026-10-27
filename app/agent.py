@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app import native_tasks, reminders, todoist
+from app import freshness, native_tasks, reminders, todoist
 from app.config import OWNER_TIMEZONE, TASK_BACKEND
 from app.db.store import PendingStore, log_action
 from app.gcal import create_event, list_events, validate_event
@@ -25,6 +25,7 @@ MAX_STEPS = 5  # stop runaway loops if the model keeps calling tools
 # which burns the free tokens-per-minute budget (Qwen on Groq: 7,000) and triggers slow fallbacks.
 # One fetch: pages are the biggest results and often fail (many sites block bots); snippets usually suffice.
 TOOL_BUDGET = {"web_search": 2, "web_fetch": 1, "search_emails": 2, "read_email": 3, "get_weather": 3}
+DATED_TOOLS = {"web_search", "web_fetch"}  # their results get the dates they mention labeled (past / upcoming)
 
 SYSTEM_PROMPT = (
     "You are Sidekick, a concise personal assistant chatting over Telegram. "
@@ -50,7 +51,12 @@ SYSTEM_PROMPT = (
     "closures, air quality, events) or get_weather fails. "
     "For anything else current or that may have changed (news, prices, opening hours), call web_search "
     "and mention the source site. One search is usually enough: answer from the snippets, and use web_fetch "
-    "only if they don't answer the question. Betting and prediction markets (like Polymarket) are not "
+    "only if they don't answer the question. Web results come with the dates they mention worked out against "
+    "today (\"9 days ago, already past\"). For events and anything time-sensitive, check that the date and year "
+    "match what the user asked: never present a past date as upcoming, and if a source gives no year or seems "
+    "to be an older listing, say so. When the user asks you to double-check or verify something, open the most "
+    "relevant page with web_fetch and confirm it there before answering. If something you said earlier turns "
+    "out to be wrong, say so plainly. Betting and prediction markets (like Polymarket) are not "
     "forecasts or facts: never use them as a source. If a tool fails, say so plainly; never make up a reason "
     "or a source. "
     "For the user's own plans (my trip, my flight, my booking, from my email), check their email and calendar "
@@ -294,6 +300,17 @@ TOOL_DECLARATIONS = [
             "required": ["place"],
         },
     },
+    {   # Production borrows web_fetch from the Fetch MCP server, with that server's own schema (see tool_specs).
+        # This declaration is for registries that provide it directly, like the eval world.
+        "name": "web_fetch",
+        "description": "Read one web page as text, e.g. to check details a search snippet leaves out, like an "
+                       "event's exact date.",
+        "parameters": {
+            "type": "object",
+            "properties": {"url": {"type": "string", "description": "The page's full address."}},
+            "required": ["url"],
+        },
+    },
 ]
 # Tools borrowed from external MCP servers (read-only, e.g. web_fetch) are added by
 # discover_mcp_tools() on the first message; see app/mcp_client.py.
@@ -504,6 +521,8 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
                                    "Answer now with what you have."}
             else:
                 result = run_tool(call.name, call.args, ctx, tools)
+            if call.name in DATED_TOOLS:  # dates labeled against today, links cleaned: see app/freshness.py
+                result = freshness.annotate(call.name, result, datetime.now(ZoneInfo(ctx.tz)).date())
             trace.record_tool(call.name, call.args, result, started)
             immediate = call.name in IMMEDIATE_WRITES and trace.steps[-1].status == "ok"
             log_action(ctx.user_id, ctx.chat_id, "executed" if immediate else trace.steps[-1].status.replace("ok", "read"),

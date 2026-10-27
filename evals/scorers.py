@@ -82,12 +82,19 @@ def reply_contains_none(record, words):
     return not found, f"reply mentions {found}"
 
 
+def mentions_only_with(record, rules):
+    """{"living shred": ["already", "past"]}: if the reply mentions it, it must also say one of those words."""
+    reply = readable(record["final_reply"])
+    broken = [k for k, words in rules.items() if readable(k) in reply and not any(readable(w) in reply for w in words)]
+    return not broken, f"mentions {broken} without saying {[rules[k] for k in broken]}"
+
+
 def max_llm_calls(record, n):
     return record["llm_calls"] <= n, f"{record['llm_calls']} LLM calls (max {n})"
 
 
 CHECKS = {f.__name__: f for f in (called, not_called, no_tools, max_calls, args_contain, created, pending,
-                                       reply_contains_all, reply_contains_none,
+                                       reply_contains_all, reply_contains_none, mentions_only_with,
                                    reply_contains_any, max_llm_calls)}
 SECTIONS = ("success", "safety", "efficiency")
 
