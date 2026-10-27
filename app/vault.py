@@ -32,6 +32,17 @@ def unlock(box: str) -> dict:
         raise VaultError("Can't open a stored secret: SECRETS_KEY changed or the data was altered.") from exc
 
 
+def lock_bytes(data: bytes) -> bytes:
+    return _fernet().encrypt(data)
+
+
+def unlock_bytes(box: bytes) -> bytes:
+    try:
+        return _fernet().decrypt(box)
+    except InvalidToken as exc:
+        raise VaultError("Can't open a stored file: SECRETS_KEY changed or the data was altered.") from exc
+
+
 def lock_text(text: str) -> str:
     return _fernet().encrypt(text.encode()).decode()
 

@@ -17,7 +17,8 @@ export type Conversation = {
   id: number; title: string; origin: "telegram" | "web"; started: string; updated: string; messages: number;
 };
 export type Message = { role: "user" | "assistant"; text: string; channel: "telegram" | "web"; at: string };
-export type Waiting = { job_id: number; text: string };
+export type Attached = { type: "image/jpeg" | "application/pdf"; name: string };
+export type Waiting = { job_id: number; text: string; attachment: Attached | null };
 export type Proposal = { id: number; action: string };
 export type Transcript = {
   id: number; title: string; origin: "telegram" | "web"; messages: Message[];
@@ -70,7 +71,8 @@ const PROBLEMS: Record<number, string> = {
   403: "That didn't come from this page as Sidekick expected. Reload the page and try again.",
   404: "Not found. It may have been deleted.",
   409: "That message was already sent.",
-  422: "That message is too long (4,000 characters at most).",
+  413: "That file is too large (5 MB at most).",
+  422: "Sidekick couldn't take that message: it's too long (4,000 characters at most), or the file isn't a real photo or PDF.",
 };
 
 async function post<T>(path: string, body?: object): Promise<Result<T>> {
@@ -106,9 +108,11 @@ function requestId(): string {
 }
 
 /** Send a message: into a conversation, or (null) as the first message of a new one. Answers right away with
- *  where it went; the reply comes later (jobStatus). The request id makes sending twice harmless. */
-export function sendMessage(conversationId: number | null, text: string): Promise<Result<Sent>> {
-  const body = { text, request_id: requestId() };
+ *  where it went; the reply comes later (jobStatus). The request id makes sending twice harmless.
+ *  `attachment`: one photo (already made a JPEG) or PDF, as base64. */
+export function sendMessage(conversationId: number | null, text: string,
+                            attachment?: Attached & { data: string }): Promise<Result<Sent>> {
+  const body = { text, request_id: requestId(), ...(attachment ? { attachment } : {}) };
   return conversationId === null ? post<Sent>("conversations", body)
     : post<Sent>(`conversations/${conversationId}/messages`, body);
 }

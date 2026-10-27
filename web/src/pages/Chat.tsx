@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  conversationsChanged, decideProposal, getConversation, jobStatus, sendMessage, type Result, type Transcript,
-  type Unavailable,
+  conversationsChanged, decideProposal, getConversation, jobStatus, sendMessage, type Attached, type Result,
+  type Transcript, type Unavailable,
 } from "../api";
 import { EmptyState, Skeleton } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
@@ -16,13 +16,46 @@ const IDEAS: { icon: IconName; text: string }[] = [
 ];
 
 const ACCEPT = "image/*,application/pdf";
-const MAX_MB = 10;
-const UPLOADS = false;  // photos and PDFs from the web: the next step (W5b)
-const UPLOADS_LATER: Unavailable = {
-  state: "unavailable", reason: "Photos and PDFs from the web come in the next step, so nothing was attached.",
-  today: "Send them to Sidekick in Telegram for now.",
-};
+const MAX_PHOTO_MB = 25;  // before it's made smaller here
+const MAX_PDF_MB = 5;     // the server's limit too (app/web_api.py)
+const MAX_SIDE = 1600;    // a photo's longest side once made smaller: plenty for reading text in it
 const SLOW_MS = 20_000;  // after this, say that long answers (web search, email) take a while
+
+/** A photo as a smaller JPEG, in base64. Drawing it anew also leaves out hidden details (like where it was taken). */
+async function shrink(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });  // upright, as it looks
+  const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  const paint = canvas.getContext("2d")!;
+  paint.fillStyle = "#fff";  // a see-through PNG gets white behind it, not black
+  paint.fillRect(0, 0, canvas.width, canvas.height);
+  paint.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  const blob = await new Promise<Blob | null>((done) => canvas.toBlob(done, "image/jpeg", 0.85));
+  if (!blob) throw new Error("not encoded");
+  return base64(blob);
+}
+
+function base64(blob: Blob): Promise<string> {
+  return new Promise((done, fail) => {
+    const reader = new FileReader();
+    reader.onload = () => done(String(reader.result).split(",", 2)[1] ?? "");
+    reader.onerror = () => fail(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** What goes with the message: one photo (made smaller) or one PDF. */
+async function prepare(file: File): Promise<Attached & { data: string }> {
+  if (file.type === "application/pdf") return { type: "application/pdf", name: file.name, data: await base64(file) };
+  return { type: "image/jpeg", name: file.name, data: await shrink(file) };
+}
+
+function AttachedLabel({ attachment }: { attachment: Attached }) {
+  return <span className="msg-attached">{attachment.type === "application/pdf" ? `📄 ${attachment.name}` : "📷 Photo"}</span>;
+}
 
 type Attachment = { id: string; file: File; preview?: string };
 
@@ -107,7 +140,7 @@ function Thread({ id, version }: { id: string; version: number }) {
       ))}
       {thread.waiting.map((w) => (
         <div key={w.job_id} className="msg user">
-          <div className="msg-bubble">{w.text}</div>
+          <div className="msg-bubble">{w.attachment && <AttachedLabel attachment={w.attachment} />}{w.text}</div>
           <span className="msg-meta">Sent</span>
         </div>
       ))}
@@ -164,21 +197,21 @@ export default function Chat() {
   useEffect(() => () => latest.current.forEach((f) => f.preview && URL.revokeObjectURL(f.preview)), []);
 
   function addFiles(list: FileList | File[]) {
-    if (!UPLOADS) {
-      setNotice(UPLOADS_LATER);
-      return;
+    const picked = Array.from(list);
+    const file = picked[0];
+    const pdf = file?.type === "application/pdf";
+    if (!file) return;
+    if (files.length > 0 || picked.length > 1) {
+      setProblem("One photo or PDF per message for now.");
+    } else if (!pdf && !file.type.startsWith("image/")) {
+      setProblem(`Not added: ${file.name} (only photos and PDFs).`);
+    } else if (file.size > (pdf ? MAX_PDF_MB : MAX_PHOTO_MB) * 1024 * 1024) {
+      setProblem(`Not added: ${file.name} (over ${pdf ? MAX_PDF_MB : MAX_PHOTO_MB} MB).`);
+    } else {
+      setFiles([{ id: `${file.name}-${file.size}-${file.lastModified}`, file,
+                  preview: pdf ? undefined : URL.createObjectURL(file) }]);
+      setProblem(null);
     }
-    const accepted: Attachment[] = [];
-    const rejected: string[] = [];
-    for (const file of Array.from(list)) {
-      const ok = file.type.startsWith("image/") || file.type === "application/pdf";
-      if (!ok) rejected.push(`${file.name} (only photos and PDFs)`);
-      else if (file.size > MAX_MB * 1024 * 1024) rejected.push(`${file.name} (over ${MAX_MB} MB)`);
-      else accepted.push({ id: `${file.name}-${file.size}-${file.lastModified}-${Math.random()}`, file,
-        preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined });
-    }
-    setFiles((current) => [...current, ...accepted]);
-    setProblem(rejected.length ? `Not added: ${rejected.join(", ")}.` : null);
   }
 
   function removeFile(id: string) {
@@ -191,10 +224,18 @@ export default function Chat() {
 
   async function submit(e?: FormEvent) {
     e?.preventDefault();
-    if (!text.trim() || sending) return;
+    if ((!text.trim() && files.length === 0) || sending) return;
     setSending(true);
     setNotice(null);
-    const result = await sendMessage(id ? Number(id) : null, text.trim());
+    let attachment: Awaited<ReturnType<typeof prepare>> | undefined;
+    try {
+      attachment = files[0] ? await prepare(files[0].file) : undefined;
+    } catch {
+      setSending(false);
+      setProblem("This photo can't be read here. Try a JPEG or PNG.");  // e.g. HEIC in a browser that can't show it
+      return;
+    }
+    const result = await sendMessage(id ? Number(id) : null, text.trim(), attachment);
     setSending(false);
     if (result.state === "signed_out") {
       navigate("/app/signin", { replace: true });
@@ -202,6 +243,8 @@ export default function Chat() {
       setNotice(result);  // nothing was sent: keep what they wrote
     } else {
       setText("");
+      files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
+      setFiles([]);
       if (id) setVersion((v) => v + 1);  // shows the message, waiting for its answer
       else navigate(`/app/chat/${result.data.conversation_id}`);
       conversationsChanged();
@@ -221,7 +264,7 @@ export default function Chat() {
     if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
   }
 
-  const canSend = text.trim().length > 0 && !sending;
+  const canSend = (text.trim().length > 0 || files.length > 0) && !sending;
 
   return (
     <div className={`chat${dragging ? " dragging" : ""}`}
@@ -233,8 +276,8 @@ export default function Chat() {
           <span className="welcome-mark"><Icon name="sparkles" size={26} /></span>
           <h1>What can I help with?</h1>
           <p className="muted">
-            Ask about your calendar, email, reminders and tasks. Your conversations, including the ones in
-            Telegram, are listed on the left: open any of them to continue it here.
+            Ask about your calendar, email, reminders and tasks, or send a photo or PDF. Your conversations,
+            including the ones in Telegram, are listed on the left: open any of them to continue it here.
           </p>
           <div className="ideas">
             {IDEAS.map((idea) => (
@@ -294,8 +337,8 @@ export default function Chat() {
         </form>
         {problem && <p className="composer-problem" role="alert">{problem}</p>}
         <p className="composer-foot">
-          Sidekick can make mistakes. Changes to your calendar or tasks always wait for your yes. Photos and PDFs:
-          send them in Telegram for now.
+          Sidekick can make mistakes. Changes to your calendar or tasks always wait for your yes. Photos and PDFs
+          aren't kept.
         </p>
       </div>
 

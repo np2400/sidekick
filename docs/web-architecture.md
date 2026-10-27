@@ -372,7 +372,23 @@ jobs (id, account_id, conversation_id, channel, source_key UNIQUE, payload_json,
   chat. A typed yes decides only its own conversation's proposal. `POST /api/actions/{approve|reject}/{id}` decides a
   web proposal by id, exactly once. Rolling back to W4 is safe; while rolled back, a Telegram yes could approve a
   web proposal (one pending per account, as before W5).
-- Commands (`/brief`, ...) stay in Telegram for now; on the web they get a pointer. Photos and PDFs: W5b.
+- Commands (`/brief`, ...) stay in Telegram for now; on the web they get a pointer.
+
+**As built (W5b, photos and PDFs from the web; no database change):**
+- One photo or PDF per message, sent with it as base64 in the JSON (no new dependency; the same session, Origin
+  and JSON checks). The page first makes a photo a JPEG of at most 1600 px, which also drops hidden details such
+  as its location. The server checks the file's first bytes (a real JPEG or PDF) and its size (5 MB for both, as
+  for Gmail PDFs), whatever its name says.
+- While its message waits, the file sits in `DATA_DIR/uploads` (`app/uploads.py`): encrypted with `SECRETS_KEY`,
+  outside the database (so never in its S3 backups), on the same disk (so a restart mid-answer still finds it).
+  The job holds only a random token, never a path. The file is deleted once the answer is saved, also when the
+  message is given up on or its sender was removed; a sweep deletes anything older than a day.
+- A photo takes the Telegram photo path (vision models). A PDF's first 6 pages of text go to the model with the
+  question for that answer only, routed like email (models allowed to see private content). The conversation
+  keeps only a mark: "[sent a photo] …" or "[sent a PDF] name · …", never the file or the text.
+- Caddy refuses any request over 8 MB before Sidekick reads it.
+- Not yet: more questions about a PDF without sending it again. Planned separately, with its own retention,
+  privacy and eval safeguards.
 
 **Why not Redis, Celery or SQS:** there's one server, and SQLite is already the source of truth and backed up. The
 queue lives in the same database as the data it changes. Revisit this when there's more than one app server.

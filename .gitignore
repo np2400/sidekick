@@ -17,6 +17,7 @@ evals/reports/*.json
 
 # Docker data folder (database + Google tokens for the container)
 data/
+uploads/
 
 # Private keys (e.g. an AWS .pem) must never be committed
 *.pem

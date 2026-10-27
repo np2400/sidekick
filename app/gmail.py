@@ -73,7 +73,8 @@ def _attachment_parts(part: dict) -> list[dict]:
     return found
 
 
-def _pdf_text(data: bytes) -> str:
+def pdf_text(data: bytes) -> str:
+    """The text of a PDF's first pages (also for PDFs uploaded on the web). Raises on broken or locked PDFs."""
     reader = PdfReader(io.BytesIO(data))
     text = "\n".join((page.extract_text() or "") for page in reader.pages[:MAX_PDF_PAGES])
     return re.sub(r"[ \t]+", " ", re.sub(r"\n\s*\n+", "\n", text)).strip()
@@ -97,7 +98,7 @@ def _attachments(message_id: str, payload: dict, ctx) -> list[dict]:
                 fetched = google_request("GET", f"{API}/{message_id}/attachments/{body['attachmentId']}", "Gmail", ctx)
                 data = fetched.get("data")
             try:
-                text = _pdf_text(base64.urlsafe_b64decode(data or ""))
+                text = pdf_text(base64.urlsafe_b64decode(data or ""))
                 item["text"], budget = text[:budget], budget - len(text)
                 if len(text) > len(item["text"]):
                     item["truncated"] = True

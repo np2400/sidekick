@@ -1,6 +1,11 @@
 # Caddy: the front door on the server. It gets a free HTTPS certificate from Let's Encrypt for your
 # domain (and renews it), then passes allowed requests to Sidekick inside Docker's private network.
 {$SIDEKICK_DOMAIN} {
+	# No request may be bigger than this, checked before Sidekick reads it: the largest real one is a web message
+	# with a 5 MB file (about 7 MB as base64 text).
+	request_body {
+		max_size 8MB
+	}
 	# Only these app paths are open to the internet; /echo, /docs etc. stay private.
 	handle /telegram/webhook {
 		reverse_proxy sidekick:8000

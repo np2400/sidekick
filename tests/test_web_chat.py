@@ -3,13 +3,20 @@ asks /api/jobs/{id} until it's done. Offline: the model is a fake that records w
 
 Owner Neel = 111, member Dad = 222. Each has one conversation from Telegram, and signs in to the web.
 """
+import base64
+import os
+import re
+import time
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
-from app import account, agent, db, jobs, main, memory, users, web_api, web_login
+from app import account, agent, db, jobs, main, memory, uploads, users, web_api, web_login
 from app.agent import PENDING, handle_approval, run_agent
 from app.trace import AgentResult, ToolContext, Trace
 from tests.fakes import ScriptedProvider, call, text
+from tests.test_gmail_attachments import tiny_pdf
 
 OWNER, DAD = 111, 222
 SITE = "https://sidekick.example.org"
@@ -22,7 +29,8 @@ class NoThreads:
 
 
 @pytest.fixture
-def web(monkeypatch):
+def web(monkeypatch, tmp_path):
+    monkeypatch.setattr(uploads, "DIR", tmp_path / "uploads")
     monkeypatch.setattr(web_api, "TELEGRAM_OWNER_ID", str(OWNER))
     monkeypatch.setattr(main, "TELEGRAM_OWNER_ID", str(OWNER))
     monkeypatch.setattr(web_login, "SIDEKICK_DOMAIN", "sidekick.example.org")
@@ -30,10 +38,11 @@ def web(monkeypatch):
     users.redeem(users.create_invite(OWNER), DAD, "Dad")
     for who, words in ((OWNER, "Neel"), (DAD, "Dad")):
         memory.remember(who, f"{words} asked in Telegram", f"Telegram answer for {words}")
-    seen = []
+    seen, inputs = [], []
 
-    def fake_agent(text, ctx, history=None, **_):
+    def fake_agent(text, ctx, history=None, images=None, history_sensitive=False):
         seen.append({"text": text, "conversation": ctx.conversation_id, "history": [m.text for m in history]})
+        inputs.append({"text": text, "images": [(i.mime, i.data) for i in images or []], "private": history_sensitive})
         if text == "crash":
             raise RuntimeError("the model died")
         if text.startswith("add "):  # proposes a calendar event, waiting for a yes
@@ -52,7 +61,7 @@ def web(monkeypatch):
         client = TestClient(main.app, base_url=SITE, headers={"Origin": origin} if origin else {})
         client.cookies.set(web_login.COOKIE, web_login.new_session(who))
         return client
-    return {"browser": browser, "seen": seen, "created": created}
+    return {"browser": browser, "seen": seen, "created": created, "inputs": inputs}
 
 
 def telegram_conversation(who: int) -> int:
@@ -113,7 +122,7 @@ def test_a_waiting_message_shows_after_a_reload_until_it_is_answered(web, monkey
     me = web["browser"](OWNER)
     sent = new_chat(me, "slow question")
     page = me.get(f"/api/conversations/{sent['conversation_id']}").json()
-    assert page["messages"] == [] and page["waiting"] == [{"job_id": sent["job_id"], "text": "slow question"}]
+    assert page["messages"] == [] and page["waiting"] == [{"job_id": sent["job_id"], "text": "slow question", "attachment": None}]
     assert me.get(f"/api/jobs/{sent['job_id']}").json() == {"status": "waiting"}
     work()
     page = me.get(f"/api/conversations/{sent['conversation_id']}").json()
@@ -263,3 +272,166 @@ def test_deleting_everything_also_removes_which_conversation_a_proposal_was_in(w
     assert count("action_conversations") == 1
     account.delete_everything(OWNER)
     assert count("action_conversations") == 0 and count("pending_actions") == 0
+
+
+# --- Photos and PDFs (W5b) ---------------------------------------------------------------------------------------
+
+PHOTO = b"\xff\xd8\xff\xe0" + b"pretend-jpeg-pixels" * 10
+
+
+def attach(name: str, data: bytes, kind: str = "image/jpeg") -> dict:
+    return {"name": name, "type": kind, "data": base64.b64encode(data).decode()}
+
+
+def new_chat_with(client, attachment: dict, text: str = "", request_id: str = "request-0101"):
+    return client.post("/api/conversations", json={"text": text, "request_id": request_id, "attachment": attachment})
+
+
+def waiting_files() -> list[Path]:
+    return sorted(uploads.DIR.iterdir()) if uploads.DIR.is_dir() else []
+
+
+def test_a_photo_goes_to_the_vision_model_and_only_a_mark_is_kept(web):
+    me = web["browser"](OWNER)
+    sent = new_chat_with(me, attach("IMG_0042.jpg", PHOTO), "what is this?").json()
+    assert web["inputs"][-1]["images"] == [("image/jpeg", PHOTO)] and web["inputs"][-1]["text"] == "what is this?"
+    assert said(me, sent["conversation_id"]) == [("user", "📷 Photo (photos aren't saved) what is this?", "web"),
+                                                 ("assistant", "reply to what is this?", "web")]
+    assert waiting_files() == []  # deleted once the answer was saved
+
+
+def test_a_pdf_is_read_for_this_answer_only_and_routed_as_private(web):
+    me = web["browser"](OWNER)
+    sent = new_chat_with(me, attach("invoice.pdf", tiny_pdf("Invoice total 42 dollars"), "application/pdf"),
+                         "what's the total?").json()
+    asked = web["inputs"][-1]
+    assert asked["text"].startswith("what's the total?") and "Invoice total 42 dollars" in asked["text"]
+    assert asked["private"] is True  # only models allowed to see private content, as for email
+    shown = said(me, sent["conversation_id"])
+    assert shown[0] == ("user", "📄 PDF (not saved) invoice.pdf · what's the total?", "web")
+    send(me, sent["conversation_id"], "and the date?")  # a follow-up: the model sees the mark, not the PDF's text
+    assert web["seen"][-1]["history"][0] == "[sent a PDF] invoice.pdf · what's the total?" and waiting_files() == []
+
+
+def test_a_file_alone_starts_a_chat_named_after_it(web):
+    me = web["browser"](OWNER)
+    pdf = new_chat_with(me, attach("lease.pdf", tiny_pdf("Rent is due on the 1st"), "application/pdf")).json()
+    photo = new_chat_with(me, attach("IMG_7.jpg", PHOTO), request_id="request-0102").json()
+    assert web["inputs"][-2]["text"].startswith(main.PDF_PROMPT) and web["inputs"][-1]["text"] == main.PHOTO_PROMPT
+    titles = {c["id"]: c["title"] for c in me.get("/api/conversations").json()}
+    assert titles[pdf["conversation_id"]] == "PDF: lease.pdf" and titles[photo["conversation_id"]] == "Photo"
+
+
+@pytest.mark.parametrize("attachment, status", [
+    (attach("fake.jpg", tiny_pdf("not a photo")), 422),                         # a PDF calling itself a photo
+    (attach("note.png", b"\x89PNG\r\n", "image/png"), 422),                     # only JPEGs (the page converts)
+    ({"name": "x.jpg", "type": "image/jpeg", "data": "not base64!"}, 422),
+    (attach("huge.jpg", PHOTO + b"0" * 5_000_000), 413),
+    (attach("huge.pdf", b"%PDF-1.4" + b"0" * 5_000_000, "application/pdf"), 413),
+])
+def test_fake_or_oversized_files_are_refused_before_anything_is_stored(web, attachment, status):
+    assert new_chat_with(web["browser"](OWNER), attachment, "hi").status_code == status
+    assert count("jobs") == 0 and count("conversations", "origin = 'web'") == 0 and waiting_files() == []
+
+
+def test_a_message_needs_words_or_a_file(web):
+    me = web["browser"](OWNER)
+    assert me.post("/api/conversations", json={"text": "  ", "request_id": "request-0001"}).status_code == 422
+
+
+def test_unreadable_pdfs_get_an_honest_reply_without_asking_the_model(web):
+    me = web["browser"](OWNER)
+    broken = new_chat_with(me, attach("broken.pdf", b"%PDF-1.4 this is not really a pdf", "application/pdf")).json()
+    empty = new_chat_with(me, attach("scan.pdf", tiny_pdf(""), "application/pdf"), request_id="request-0102").json()
+    assert "couldn't read that PDF" in said(me, broken["conversation_id"])[-1][1]
+    assert "couldn't find any text" in said(me, empty["conversation_id"])[-1][1]
+    assert web["inputs"] == [] and waiting_files() == []
+
+
+def test_a_waiting_file_is_encrypted_survives_a_crash_and_is_deleted_after_the_answer(web, monkeypatch):
+    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    me = web["browser"](OWNER)
+    sent = new_chat_with(me, attach("IMG_1.jpg", PHOTO), "read this").json()
+    [held] = waiting_files()
+    assert b"pretend-jpeg-pixels" not in held.read_bytes()  # encrypted on disk
+    assert me.get(f"/api/conversations/{sent['conversation_id']}").json()["waiting"][0]["attachment"] == {
+        "type": "image/jpeg", "name": "IMG_1.jpg"}
+    real, tries = main.run_agent, []
+
+    def dies_once(*args, **kwargs):
+        tries.append(1)
+        if len(tries) == 1:
+            raise RuntimeError("the server died here")
+        return real(*args, **kwargs)
+    monkeypatch.setattr(main, "run_agent", dies_once)
+    work()
+    assert waiting_files() == [held]  # the retry still needs it
+    with db.connect() as conn:
+        conn.execute("UPDATE jobs SET lease_until = datetime('now', '-1 second')")
+    work()
+    assert web["inputs"][-1]["images"] == [("image/jpeg", PHOTO)] and waiting_files() == []
+
+
+def test_sending_a_file_twice_stores_it_once(web, monkeypatch):
+    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    me = web["browser"](OWNER)
+    first = new_chat_with(me, attach("IMG_1.jpg", PHOTO)).json()
+    again = new_chat_with(me, attach("IMG_1.jpg", PHOTO)).json()
+    thread = telegram_conversation(OWNER)
+    body = {"text": "", "request_id": "request-0200", "attachment": attach("IMG_2.jpg", PHOTO)}
+    me.post(f"/api/conversations/{thread}/messages", json=body)
+    me.post(f"/api/conversations/{thread}/messages", json=body)
+    assert first == again and count("jobs") == 2 and len(waiting_files()) == 2
+
+
+def test_two_identical_sends_at_the_same_instant_keep_one_file(web, monkeypatch):
+    """Both passed the "sent before?" check before either was queued: the second one's file is dropped."""
+    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    message = web_api.NewMessage(text="", request_id="request-0400", attachment=attach("IMG_1.jpg", PHOTO))
+    thread = telegram_conversation(OWNER)
+    first = web_api._queue(OWNER, "web:111:request-0400", thread, message, PHOTO)
+    second = web_api._queue(OWNER, "web:111:request-0400", thread, message, PHOTO)
+    assert first is not None and second is None and len(waiting_files()) == 1
+
+
+def test_a_file_whose_message_was_given_up_on_or_not_answered_is_deleted_too(web, monkeypatch):
+    monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
+    monkeypatch.setattr(account.google_web, "disconnect", lambda account_id: True)
+    me, dad = web["browser"](OWNER), web["browser"](DAD)
+    sent = new_chat_with(me, attach("IMG_1.jpg", PHOTO), "crash").json()
+    dad.post(f"/api/conversations/{telegram_conversation(DAD)}/messages",
+             json={"text": "", "request_id": "request-0300", "attachment": attach("IMG_2.jpg", PHOTO)})
+    account.remove_member(DAD)  # removed while the photo waited: no answer, and the file goes too
+    for _ in range(jobs.MAX_ATTEMPTS + 1):
+        work()
+        with db.connect() as conn:
+            conn.execute("UPDATE jobs SET lease_until = datetime('now', '-1 second') WHERE status = 'running'")
+    assert said(me, sent["conversation_id"]) == [("user", "📷 Photo (photos aren't saved) crash", "web"),
+                                                 ("assistant", jobs.GAVE_UP, "web")]
+    assert waiting_files() == []
+
+
+def test_uploads_left_behind_are_swept_after_a_day_and_tokens_are_never_paths(web):
+    old, new = uploads.keep(b"old"), uploads.keep(b"new")
+    day_ago = time.time() - 25 * 3600
+    os.utime(uploads.DIR / old, (day_ago, day_ago))
+    assert uploads.sweep() == 1 and uploads.read(old) is None and uploads.read(new) == b"new"
+    victim = uploads.DIR.parent / "victim.txt"
+    victim.write_text("keep me")
+    uploads.discard("../victim.txt")
+    assert victim.exists() and uploads.read("../victim.txt") is None and uploads.read("") is None
+
+
+def test_the_daily_limit_covers_photos_too(web, monkeypatch):
+    monkeypatch.setattr(main, "MEMBER_DAILY_LIMIT", 0)
+    dad = web["browser"](DAD)
+    sent = new_chat_with(dad, attach("IMG_1.jpg", PHOTO), "what is it?").json()
+    assert said(dad, sent["conversation_id"])[-1][1] == main.LIMIT_REPLY and web["inputs"] == []
+    assert waiting_files() == []
+
+
+def test_caddy_refuses_requests_bigger_than_the_largest_real_message():
+    caddy = (Path(__file__).resolve().parent.parent / "caddy" / "Caddyfile").read_text()
+    limit = int(re.search(r"max_size (\d+)MB", caddy).group(1)) * 1_000_000
+    largest = 4 * -(-5_000_000 // 3) + 2 * web_api.MAX_MESSAGE + 1_000  # a 5 MB file as base64, text, JSON
+    assert largest < limit <= 10_000_000

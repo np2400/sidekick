@@ -6,13 +6,17 @@ The pages call these from the browser: /app is served by Caddy from the built we
 no CORS. Reading came in W3b; chatting in W5: a message is queued like a Telegram one (app/jobs.py), answered
 by the workers into its conversation, and the page asks /api/jobs/{id} until it's done.
 """
+import base64
+import binascii
 import json
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from app import daily, google_auth, google_web, jobs, memory, native_tasks, reminders, settings, users, web_login
+from app import (daily, gmail, google_auth, google_web, jobs, memory, native_tasks, reminders, settings, uploads, users,
+                 vault, web_login)
 from app.agent import PENDING, decide
 from app.config import TASK_BACKEND, TELEGRAM_OWNER_ID
 from app.trace import ToolContext
@@ -22,10 +26,28 @@ router = APIRouter(prefix="/api")
 MAX_MESSAGE = 4000  # characters, like a Telegram message (4,096)
 
 
+# What may be attached (W5b): the page turns every photo into a JPEG (smaller, and without hidden details like
+# location) before sending. Checked by the file's first bytes, not its name: (first bytes, largest size).
+ATTACHMENTS = {"image/jpeg": (b"\xff\xd8\xff", 5_000_000), "application/pdf": (b"%PDF-", gmail.MAX_PDF_BYTES)}
+
+
+class Attachment(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    type: Literal["image/jpeg", "application/pdf"]
+    data: str = Field(max_length=7_000_000)  # base64 of at most 5 MB
+
+
 class NewMessage(BaseModel):
-    text: str = Field(min_length=1, max_length=MAX_MESSAGE)
+    text: str = Field(default="", max_length=MAX_MESSAGE)
     # Made by the page for each message and reused if it sends again (e.g. the network dropped): queued once.
     request_id: str = Field(pattern=r"^[A-Za-z0-9-]{8,64}$")
+    attachment: Attachment | None = None  # one photo or PDF
+
+    @model_validator(mode="after")
+    def says_something(self):
+        if not self.text.strip() and self.attachment is None:
+            raise ValueError("a message needs text or an attachment")
+        return self
 
 
 def signed_in(request: Request) -> int:
@@ -82,10 +104,11 @@ def new_conversation(message: NewMessage, account_id: int = Depends(signed_in)) 
     key = f"web:{account_id}:{message.request_id}"
     if (earlier := jobs.find(key)) is not None:
         return _sent_before(earlier)
-    conversation_id = memory.start_web(account_id, message.text)
+    file = _checked(message.attachment)
+    conversation_id = memory.start_web(account_id, message.text or _label(message.attachment))
     if conversation_id is None:
         raise HTTPException(status_code=503, detail="Sidekick can't save conversations right now")
-    job_id = _queue(account_id, key, conversation_id, message.text)
+    job_id = _queue(account_id, key, conversation_id, message, file)
     if job_id is None:  # the same message, sent twice at the same moment: the first one counts
         memory.discard_if_empty(account_id, conversation_id)
         return _sent_before(jobs.find(key))
@@ -98,7 +121,9 @@ def send(conversation_id: int, message: NewMessage, account_id: int = Depends(si
     if not memory.owns(account_id, conversation_id):
         raise HTTPException(status_code=404, detail="not found")
     key = f"web:{account_id}:{message.request_id}"
-    job_id = _queue(account_id, key, conversation_id, message.text) or jobs.find(key)["id"]
+    if (earlier := jobs.find(key)) is not None:
+        return {"conversation_id": conversation_id, "job_id": earlier["id"]}
+    job_id = _queue(account_id, key, conversation_id, message, _checked(message.attachment)) or jobs.find(key)["id"]
     return {"conversation_id": conversation_id, "job_id": job_id}
 
 
@@ -125,14 +150,48 @@ def act(kind: str, action_id: int, account_id: int = Depends(signed_in)) -> dict
     return {"reply": reply}
 
 
-def _queue(account_id: int, key: str, conversation_id: int, text: str) -> int | None:
-    """Write the message down as a job (None if this key was queued before), then let the workers answer it."""
+def _queue(account_id: int, key: str, conversation_id: int, message: NewMessage, file: bytes | None) -> int | None:
+    """Write the message down as a job (None if this key was queued before), then let the workers answer it.
+    An attached file waits encrypted on disk (app/uploads.py); the job holds only its token."""
     from app.main import process_now  # here: app.main imports this module
-    log.info("Web message from %s in conversation %s (%d chars)", account_id, conversation_id, len(text))
-    job_id = jobs.enqueue(account_id, "web", key, {"conversation_id": conversation_id, "text": text})
+    payload = {"conversation_id": conversation_id, "text": message.text.strip()}
+    if file is not None:
+        try:
+            payload["upload"] = {"token": uploads.keep(file), "type": message.attachment.type,
+                                 "name": message.attachment.name}
+        except vault.VaultError:
+            raise HTTPException(status_code=503, detail="Sidekick can't hold files safely right now")
+    log.info("Web message from %s in conversation %s (%d chars%s)", account_id, conversation_id, len(message.text),
+             f", {message.attachment.type}, {len(file)} bytes" if file is not None else "")
+    job_id = jobs.enqueue(account_id, "web", key, payload)
+    if job_id is None and "upload" in payload:  # sent twice: the first one's file is the one used
+        uploads.discard(payload["upload"]["token"])
     if job_id is not None:
         process_now()  # without worker threads (tests, a laptop): answered right here
     return job_id
+
+
+def _checked(attachment: Attachment | None) -> bytes | None:
+    """The attached file's bytes, if it really is what it says (a JPEG or a PDF) and not too large. Else 422/413."""
+    if attachment is None:
+        return None
+    try:
+        data = base64.b64decode(attachment.data, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=422, detail="the attachment isn't valid base64")
+    first_bytes, largest = ATTACHMENTS[attachment.type]
+    if not data.startswith(first_bytes):
+        raise HTTPException(status_code=422, detail="the attachment isn't a real photo or PDF")
+    if len(data) > largest:
+        raise HTTPException(status_code=413, detail="the attachment is too large")
+    return data
+
+
+def _label(attachment: Attachment | None) -> str:
+    """A title for a chat that starts with only a file."""
+    if attachment is None:
+        return ""
+    return f"PDF: {attachment.name}" if attachment.type == "application/pdf" else "Photo"
 
 
 def _sent_before(earlier: dict) -> dict:

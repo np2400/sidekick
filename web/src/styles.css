@@ -289,6 +289,7 @@ code {
 .msg.assistant .msg-bubble { background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
   border-bottom-left-radius: 6px; }
 .msg-meta { padding: 0 6px; font-size: 12px; color: var(--muted); }
+.msg-attached { display: block; margin-bottom: 4px; font-weight: 600; }
 .msg-bubble.thinking { display: flex; align-items: center; gap: 10px; color: var(--muted); }
 .dots { display: inline-flex; gap: 4px; }
 .dots i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: blink 1.2s infinite both; }

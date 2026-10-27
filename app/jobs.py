@@ -96,7 +96,9 @@ def waiting(account_id: int, conversation_id: int) -> list[dict]:
     for row in rows:
         payload = _open(row["payload_encrypted"]) or {}
         if payload.get("conversation_id") == conversation_id:
-            out.append({"job_id": row["id"], "text": payload.get("text", "")})
+            upload = payload.get("upload")
+            out.append({"job_id": row["id"], "text": payload.get("text", ""),
+                        "attachment": {"type": upload["type"], "name": upload["name"]} if upload else None})
     return out
 
 

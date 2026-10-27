@@ -12,12 +12,14 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from app import account, daily, db, google_web, jobs, memory, reminders, settings, users, web_api, web_login
+from app import account, daily, db, google_web, jobs, memory, reminders, settings, uploads, users, web_api, web_login
 from app.vault import VaultError
 from app.agent import PENDING, decide, handle_approval, run_agent
 from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
 from app.config import MEMBER_DAILY_LIMIT, SCHEDULER_ENABLED, TELEGRAM_OWNER_ID, TELEGRAM_WEBHOOK_SECRET
 from app.db.store import first_time_seen, recent_actions, save_trace
+from app.gmail import MAX_ATTACHMENT_TEXT, MAX_PDF_PAGES, pdf_text
+from app.llm.types import Image
 from app.logging_setup import RequestIdMiddleware, setup_logging
 from app.telegram import (answer_button, approval_buttons, bot_username, download_photo, remove_buttons,
                           send_document, send_message)
@@ -37,7 +39,7 @@ memory.import_legacy()  # once after W2 (and after a rollback): earlier messages
 @asynccontextmanager
 async def lifespan(_app):
     """Start the reminder scheduler and the job workers with the server, stop them on shutdown."""
-    scheduler = (reminders.Scheduler(send_to_account, jobs=[daily.tick, memory.expire, jobs.expire])
+    scheduler = (reminders.Scheduler(send_to_account, jobs=[daily.tick, memory.expire, jobs.expire, uploads.sweep])
                  if SCHEDULER_ENABLED else None)
     workers = jobs.Workers(handle_job, deliver_job) if SCHEDULER_ENABLED else None
     _app.state.scheduler, _app.state.workers = scheduler, workers  # /health checks them
@@ -298,32 +300,76 @@ def handle_web_job(job: dict, done_before: list[str]) -> dict:
         reply = "Done before a restart:\n" + "\n".join(f"• {e}" for e in done_before)
         memory.remember(account_id, p["text"], reply, conversation_id=ctx.conversation_id)
         return {"text": reply}
-    return {"text": web_answer(ctx, p["text"])}
+    return {"text": web_answer(ctx, p["text"], p.get("upload"))}
 
 
 WEB_COMMANDS = ("Commands like /brief and /reminders work in Telegram. Here, just ask in words, for example "
                 "\"what's my plan today?\"")
 
 
-def web_answer(ctx: ToolContext, text: str) -> str:
-    """A message typed in Sidekick Web: a yes or no to this conversation's proposal, or the agent. Every exchange
-    is saved, since the page shows the saved conversation (a reply that isn't saved would never appear)."""
-    if text.strip().startswith("/"):
+def web_answer(ctx: ToolContext, text: str, upload: dict | None = None) -> str:
+    """A message typed in Sidekick Web: a photo or PDF with it, a yes or no to this conversation's proposal, or the
+    agent. Every exchange is saved, since the page shows the saved conversation (a reply that isn't saved would
+    never appear). A file is saved only as a mark like "[sent a photo]": never the file, nor a PDF's text."""
+    said = saved_as(text, upload)
+    if upload is not None:
+        if over_limit(ctx):
+            reply = LIMIT_REPLY
+        elif (data := uploads.read(upload["token"])) is None:
+            reply = "Sorry, I couldn't open that file. Please send it again."
+        elif upload["type"] != "application/pdf":  # a photo: the same path as one sent in Telegram
+            return agent_reply(ctx, text or PHOTO_PROMPT, images=[Image(data=data, mime="image/jpeg")],
+                               remember_as=said)[0]
+        elif (document := read_pdf(data)) is None:
+            reply = "I couldn't read that PDF: it may be password-protected or damaged."
+        elif not document:
+            reply = "I couldn't find any text in that PDF. It may be scanned pages: try sending a photo of the page."
+        else:  # its text goes to the model for this answer only, as private as email
+            return agent_reply(ctx, f"{text or PDF_PROMPT}\n\n[The attached PDF \"{upload['name']}\" as text, its first "
+                                    f"{MAX_PDF_PAGES} pages at most:]\n{document[:MAX_UPLOAD_TEXT]}",
+                               remember_as=said, private=True)[0]
+    elif text.strip().startswith("/"):
         reply = WEB_COMMANDS
     elif (reply := handle_approval(ctx, text)) is None:
         if not over_limit(ctx):  # the limit counts Telegram and the web together
             return agent_reply(ctx, text)[0]  # saves the exchange itself
         reply = LIMIT_REPLY
-    memory.remember(ctx.chat_id, text, reply, conversation_id=ctx.conversation_id)
+    memory.remember(ctx.chat_id, said, reply, conversation_id=ctx.conversation_id)
     return reply
+
+
+PDF_PROMPT = ("Summarize this PDF. If it has dates, times or events, list them and offer to add reminders or "
+              "calendar events.")
+MAX_UPLOAD_TEXT = 2 * MAX_ATTACHMENT_TEXT  # characters of a PDF sent to the model (each call must stay small)
+
+
+def saved_as(text: str, upload: dict | None) -> str:
+    """What the conversation keeps of a message: its words, and only a mark for a file."""
+    if upload is None:
+        return text
+    if upload["type"] == "application/pdf":
+        return f"[sent a PDF] {upload['name']}" + (f" · {text}" if text else "")
+    return f"[sent a photo] {text}".strip()
+
+
+def read_pdf(data: bytes) -> str | None:
+    """A PDF's text ("" if it has none, e.g. scanned pages), or None if it can't be read at all."""
+    try:
+        return pdf_text(data)
+    except Exception as exc:  # broken, encrypted or odd PDFs: say so, never crash the job
+        log.warning("Couldn't read an uploaded PDF: %s", type(exc).__name__)
+        return None
 
 
 def deliver_web(job: dict, reply: dict) -> None:
     """Nothing to send: the page reads the reply from the conversation. Only a message given up on still has to be
-    written there, so it doesn't just vanish."""
-    if reply.get("gave_up") and job["payload"]:
-        memory.remember(job["account_id"], job["payload"]["text"], reply["text"],
-                        conversation_id=job["payload"]["conversation_id"])
+    written there, so it doesn't just vanish. Either way, its file is deleted now: the answer is saved."""
+    payload = job["payload"] or {}
+    if reply.get("gave_up") and payload:
+        memory.remember(job["account_id"], saved_as(payload["text"], payload.get("upload")), reply["text"],
+                        conversation_id=payload["conversation_id"])
+    if upload := payload.get("upload"):
+        uploads.discard(upload["token"])
 
 
 def deliver_telegram(job: dict, reply: dict) -> None:
@@ -621,10 +667,11 @@ def invite_text(owner_id: int) -> str:
 
 
 def agent_reply(ctx: ToolContext, text: str, images: list | None = None,
-                remember_as: str | None = None) -> tuple[str, list | None]:
-    """Run the agent with the conversation's recent messages; returns the reply and the buttons to show under it."""
+                remember_as: str | None = None, private: bool = False) -> tuple[str, list | None]:
+    """Run the agent with the conversation's recent messages; returns the reply and the buttons to show under it.
+    `private`: the message itself holds private content (an uploaded PDF), routed like email."""
     past, past_sensitive = memory.history(ctx.chat_id, ctx.conversation_id)
-    result = run_agent(text, ctx, images=images, history=past, history_sensitive=past_sensitive)
+    result = run_agent(text, ctx, images=images, history=past, history_sensitive=past_sensitive or private)
     trace_json = result.trace.to_log()
     log.info("trace %s", trace_json)
     save_trace(ctx.chat_id, result.trace.trace_id, result.trace.outcome, trace_json)  # survives redeploys
