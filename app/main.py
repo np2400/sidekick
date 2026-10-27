@@ -12,7 +12,8 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from app import account, daily, db, google_web, jobs, memory, reminders, settings, uploads, users, web_api, web_login
+from app import (account, daily, db, google_web, jobs, memory, notifications, reminders, settings, uploads, users,
+                 web_api, web_login)
 from app.vault import VaultError
 from app.agent import PENDING, decide, handle_approval, run_agent
 from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
@@ -39,7 +40,8 @@ memory.import_legacy()  # once after W2 (and after a rollback): earlier messages
 @asynccontextmanager
 async def lifespan(_app):
     """Start the reminder scheduler and the job workers with the server, stop them on shutdown."""
-    scheduler = (reminders.Scheduler(send_to_account, jobs=[daily.tick, memory.expire, jobs.expire, uploads.sweep])
+    scheduler = (reminders.Scheduler(notify, jobs=[daily.tick, notifications.send_pending, memory.expire, jobs.expire,
+                                                  uploads.sweep, notifications.expire])
                  if SCHEDULER_ENABLED else None)
     workers = jobs.Workers(handle_job, deliver_job) if SCHEDULER_ENABLED else None
     _app.state.scheduler, _app.state.workers = scheduler, workers  # /health checks them
@@ -622,6 +624,24 @@ def send_to_account(account_id: int, text: str, buttons: list | None = None) -> 
         log.warning("Account %s has no Telegram to send to", account_id)
         return {"ok": False, "description": "no Telegram linked to this account"}
     return send_message(chat, text, buttons=buttons)
+
+
+def notify(account_id: int, text: str, buttons: list | None = None, *, kind: str = "system", ref: str = "",
+           item: int | None = None) -> dict:
+    """How the scheduler reaches a person (W6b): the app's notification center and their phones (an outbox sent
+    by notifications.send_pending), and Telegram as before. Telegram is skipped only if they turned it off AND a
+    phone gets notifications, so nothing lands nowhere. Same result as send_message: the reminder scheduler
+    retries a failed Telegram send; the center and phones get each ref once, however often it's retried."""
+    body = text.removeprefix("☀️ Good morning!\n\n").removeprefix("⏰ ").removeprefix("(resent) ⏰ ")
+    try:
+        notifications.record(account_id, kind, body, ref or f"{kind}:{secrets.token_hex(8)}", item)
+    except VaultError:
+        log.warning("Notification not saved: SECRETS_KEY is not set")
+    if users.telegram_chat(account_id) is None:
+        return {"ok": True}  # in the app (and on phones, if any): there's no Telegram to send to
+    if notifications.telegram_on(account_id) or not notifications.has_devices(account_id):
+        return send_to_account(account_id, text, buttons)
+    return {"ok": True}
 
 
 def connect_reply(ctx: ToolContext, gmail: bool = False) -> tuple[str, list | None]:

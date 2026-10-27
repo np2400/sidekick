@@ -56,7 +56,8 @@ def tick(send, now: datetime | None = None, spawn=background) -> None:
 def send_brief(send, ctx: ToolContext) -> None:
     try:
         text = build_brief(days_ahead=0, ctx=ctx)
-        send(ctx.chat_id, "☀️ Good morning!\n\n" + text)
+        today = datetime.now(ZoneInfo(ctx.tz)).date().isoformat()
+        send(ctx.chat_id, "☀️ Good morning!\n\n" + text, kind="brief", ref=f"brief:{today}")
         memory.remember(ctx.chat_id, "[morning brief]", text, sensitive=True)  # it can include email previews
         log.info("Morning brief sent to %s", ctx.chat_id)
     except Exception:

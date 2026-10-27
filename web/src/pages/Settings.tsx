@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { getPreferences, getSession, signOut } from "../api";
+import { useEffect, useState } from "react";
+import { getPreferences, getSession, setTelegramNotifications, signOut } from "../api";
 import { PageHeader, PreviewPill, TelegramHint } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
 import Notifications from "../components/Notifications";
@@ -42,6 +43,15 @@ export default function Settings() {
   const prefs = useResult(getPreferences);
   const me = session?.state === "ready" ? session.data : null;
   const values = prefs?.state === "ready" ? prefs.data : null;
+  const [telegramOn, setTelegramOn] = useState<boolean | null>(null);
+  useEffect(() => { if (values) setTelegramOn(values.telegram_notifications); }, [values]);
+
+  async function toggleTelegram(on: boolean) {
+    setTelegramOn(on);
+    const result = await setTelegramNotifications(on);
+    if (result.state === "ready") setTelegramOn(result.data.telegram_notifications);
+    else setTelegramOn(!on);  // didn't save: show what's really set
+  }
 
   async function leave() {
     await signOut();
@@ -63,6 +73,13 @@ export default function Settings() {
 
       <Section title="Notifications">
         <Notifications />
+        {values?.telegram && telegramOn !== null && (
+          <Row icon="send" title="Also send to Telegram"
+            body="Reminders and your morning brief also arrive in Telegram. Turned off, they still go there while no device here gets notifications, so nothing gets lost."
+            control={<label className="switch"><input type="checkbox" checked={telegramOn}
+              onChange={(e) => toggleTelegram(e.target.checked)} /><span aria-hidden="true" />
+              <span className="sr-only">Also send to Telegram</span></label>} />
+        )}
       </Section>
 
       <Section title="Appearance">
@@ -96,7 +113,7 @@ export default function Settings() {
       </Section>
 
       <Section title="About">
-        <Row icon="info" title="Sidekick Web" body="Version 0.4: chat with Sidekick here or in Telegram, in the same conversations, and get notifications."
+        <Row icon="info" title="Sidekick Web" body="Version 0.5: chat with Sidekick here or in Telegram, in the same conversations; reminders and your morning brief as notifications."
           control={<PreviewPill />} />
       </Section>
     </div>

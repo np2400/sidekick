@@ -187,8 +187,7 @@ export default function Notifications() {
         <div className="setting-text">
           <p className="setting-title">On your phone or computer</p>
           <div className="muted small">
-            Get Sidekick's notifications on this phone or computer, also when the app is closed. For now that's a
-            test; reminders and the morning brief come next.
+            Your reminders and morning brief on this phone or computer, also when the app is closed.
           </div>
           <div className="notifications-state">{state}</div>
         </div>

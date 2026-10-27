@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { CONVERSATIONS_CHANGED, getSession, listConversations, signOut } from "../api";
+import { CONVERSATIONS_CHANGED, getNotifications, getSession, listConversations, signOut } from "../api";
+import { NOTIFICATIONS_READ } from "../pages/NotificationsPage";
 import { EmptyState, Logo, PreviewPill, Skeleton } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
 import ThemeSwitch from "../components/ThemeSwitch";
@@ -9,12 +10,13 @@ import { useResult } from "../useResult";
 const NAV: { to: string; label: string; icon: IconName; end?: boolean }[] = [
   { to: "/app/chat", label: "Chat", icon: "chat" },
   { to: "/app", label: "Dashboard", icon: "grid", end: true },
+  { to: "/app/notifications", label: "Notifications", icon: "bell" },
   { to: "/app/apps", label: "Connected apps", icon: "plug" },
   { to: "/app/settings", label: "Settings", icon: "sliders" },
 ];
 
 const TITLES: Record<string, string> = {
-  "/app": "Dashboard", "/app/apps": "Connected apps", "/app/settings": "Settings",
+  "/app": "Dashboard", "/app/apps": "Connected apps", "/app/settings": "Settings", "/app/notifications": "Notifications",
 };
 
 export default function AppLayout() {
@@ -30,6 +32,14 @@ export default function AppLayout() {
   }, []);
   const loadConversations = useCallback(() => listConversations(), [listVersion]);
   const conversations = useResult(loadConversations);
+  const [unread, setUnread] = useState(0);  // new notifications, for the sidebar's count
+  useEffect(() => {
+    let alive = true;
+    const count = () => getNotifications().then((r) => alive && setUnread(r.state === "ready" ? r.data.unread : 0));
+    count();  // on every page change, and when the notifications page marks them read
+    window.addEventListener(NOTIFICATIONS_READ, count);
+    return () => { alive = false; window.removeEventListener(NOTIFICATIONS_READ, count); };
+  }, [pathname]);
 
   useEffect(() => setOpen(false), [pathname]);  // a tap on a link closes the drawer
   useEffect(() => {
@@ -73,6 +83,9 @@ export default function AppLayout() {
                   `side-link${(chat ? pathname.startsWith("/app/chat/") : isActive) ? " active" : ""}`}>
                 <Icon name={item.icon} size={18} />
                 {item.label}
+                {item.to === "/app/notifications" && unread > 0 && (
+                  <span className="nav-count" aria-label={`${unread} new`}>{unread > 99 ? "99+" : unread}</span>
+                )}
               </NavLink>
             );
           })}

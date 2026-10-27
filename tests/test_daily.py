@@ -24,7 +24,7 @@ def sent(monkeypatch):
 
 
 def run(sent, now):
-    daily.tick(lambda chat_id, text: sent.append((chat_id, text)), now=now, spawn=lambda job: job())
+    daily.tick(lambda chat_id, text, **_: sent.append((chat_id, text)), now=now, spawn=lambda job: job())
 
 
 def test_sent_once_in_its_window_and_again_the_next_day(sent):
@@ -56,4 +56,4 @@ def test_the_brief_is_remembered_as_private_and_failures_dont_escape(sent, monke
     assert past[0].text == "[morning brief]" and private is True
 
     monkeypatch.setattr(daily, "build_brief", lambda days_ahead, ctx: 1 / 0)
-    daily.send_brief(lambda chat_id, text: None, ToolContext(chat_id=111))  # logged, not raised: the scheduler keeps running
+    daily.send_brief(lambda chat_id, text, **_: None, ToolContext(chat_id=111))  # logged, not raised: the scheduler keeps running

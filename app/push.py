@@ -82,32 +82,44 @@ def remove(account_id: int, device_id: int) -> bool:
 
 
 def send(account_id: int, title: str, body: str, url: str = "/app/", tag: str = "") -> dict:
-    """Notify every active device of an account. {"sent", "failed", "gone"}: gone = the device no longer accepts
-    them (app removed, permission withdrawn), so it's marked and skipped from now on."""
+    """Notify every active device of an account now (the Settings test). {"sent", "failed", "gone"}: gone = the
+    device no longer accepts them (app removed, permission withdrawn), so it's marked and skipped from now on."""
     counts = {"sent": 0, "failed": 0, "gone": 0}
     with db.connect() as conn:
-        rows = conn.execute("SELECT id, endpoint_encrypted, keys_encrypted FROM push_subscriptions "
-                            "WHERE account_id = ? AND status = 'active'", (account_id,)).fetchall()
-    message = json.dumps({"title": title, "body": body[:MAX_BODY], "url": url, "tag": tag}).encode()
-    for row in rows:
-        try:
-            status = _post(vault.unlock_text(row["endpoint_encrypted"]), vault.unlock(row["keys_encrypted"]), message)
-        except (httpx.HTTPError, vault.VaultError, ValueError) as exc:
-            log.warning("Push to device %s failed: %s", row["id"], type(exc).__name__)
-            status = None
-        outcome = "sent" if status in (200, 201, 202) else "gone" if status in (404, 410) else "failed"
-        counts[outcome] += 1
-        if outcome != "sent":
-            log.warning("Push to device %s: HTTP %s", row["id"], status)  # the status only: never the endpoint
-        with db.connect() as conn:
-            if outcome == "sent":
-                conn.execute("UPDATE push_subscriptions SET last_ok_at = datetime('now'), failures = 0 WHERE id = ?",
-                             (row["id"],))
-            elif outcome == "gone":
-                conn.execute("UPDATE push_subscriptions SET status = 'gone' WHERE id = ?", (row["id"],))
-            else:
-                conn.execute("UPDATE push_subscriptions SET failures = failures + 1 WHERE id = ?", (row["id"],))
+        ids = [r[0] for r in conn.execute("SELECT id FROM push_subscriptions WHERE account_id = ? AND status = 'active'",
+                                          (account_id,))]
+    for device_id in ids:
+        outcome = deliver(device_id, {"title": title, "body": body, "url": url, "tag": tag})
+        counts["sent" if outcome == "sent" else "gone" if outcome in ("gone", "missing") else "failed"] += 1
     return counts
+
+
+def deliver(device_id: int, message: dict) -> str:
+    """One notification to one device: "sent", "gone" (now marked so), "missing" (removed, or not active) or
+    "failed" (try again later). Reminders go through the outbox (app/notifications.py), which retries."""
+    with db.connect() as conn:
+        row = conn.execute("SELECT id, endpoint_encrypted, keys_encrypted FROM push_subscriptions "
+                           "WHERE id = ? AND status = 'active'", (device_id,)).fetchone()
+    if row is None:
+        return "missing"
+    body = json.dumps({**message, "body": message.get("body", "")[:MAX_BODY]}).encode()
+    try:
+        status = _post(vault.unlock_text(row["endpoint_encrypted"]), vault.unlock(row["keys_encrypted"]), body)
+    except (httpx.HTTPError, vault.VaultError, ValueError) as exc:
+        log.warning("Push to device %s failed: %s", row["id"], type(exc).__name__)
+        status = None
+    outcome = "sent" if status in (200, 201, 202) else "gone" if status in (404, 410) else "failed"
+    if outcome != "sent":
+        log.warning("Push to device %s: HTTP %s", row["id"], status)  # the status only: never the endpoint
+    with db.connect() as conn:
+        if outcome == "sent":
+            conn.execute("UPDATE push_subscriptions SET last_ok_at = datetime('now'), failures = 0 WHERE id = ?",
+                         (row["id"],))
+        elif outcome == "gone":
+            conn.execute("UPDATE push_subscriptions SET status = 'gone' WHERE id = ?", (row["id"],))
+        else:
+            conn.execute("UPDATE push_subscriptions SET failures = failures + 1 WHERE id = ?", (row["id"],))
+    return outcome
 
 
 def _post(endpoint: str, keys: dict, message: bytes) -> int:

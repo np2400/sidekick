@@ -615,3 +615,25 @@ a.google-btn:hover { filter: brightness(0.97); }
 .notifications > .btn { align-self: flex-start; }
 .notifications > :not(.setting-row) { margin: 0 20px 0 70px; }  /* in line with the row's text, after its icon */
 .notifications > :last-child:not(.setting-row) { margin-bottom: 14px; }
+
+/* Notifications (W6b): the center, the sidebar's count, the Telegram switch */
+.notice-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.notice { display: flex; gap: 14px; padding: 16px 18px; }
+.notice.unread { border-color: var(--accent); }
+.notice-icon { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 11px;
+  background: var(--surface-2); color: var(--accent); }
+.notice-text { flex: 1; min-width: 0; }
+.notice-title { margin: 0 0 4px; font-weight: 600; }
+.notice-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.notice-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.nav-count { margin-left: auto; min-width: 20px; padding: 1px 6px; border-radius: 999px; background: var(--accent);
+  color: var(--accent-ink); font-size: 12px; font-weight: 650; text-align: center; }
+.switch { position: relative; display: inline-flex; cursor: pointer; }
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch span[aria-hidden] { width: 42px; height: 24px; border-radius: 999px; background: var(--surface-3);
+  transition: background 0.15s; position: relative; }
+.switch span[aria-hidden]::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
+  border-radius: 50%; background: #fff; box-shadow: var(--shadow-sm); transition: transform 0.15s; }
+.switch input:checked + span[aria-hidden] { background: var(--accent); }
+.switch input:checked + span[aria-hidden]::after { transform: translateX(18px); }
+.switch input:focus-visible + span[aria-hidden] { outline: 2px solid var(--accent); outline-offset: 2px; }

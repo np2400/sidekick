@@ -34,7 +34,17 @@ export type Tasks = { tasks: Task[]; elsewhere?: string };
 export type Brief = { date: string; text: string };
 export type GoogleLink = { managed: "server" | "you"; calendar: boolean; gmail: boolean; email: string | null };
 export type Connections = { google: GoogleLink; telegram: boolean; sign_in: string | null };
-export type Preferences = { timezone: string; brief_time: string | null };
+export type Preferences = {
+  timezone: string; brief_time: string | null;
+  telegram: boolean;                 // linked to Telegram
+  telegram_notifications: boolean;   // reminders and the brief also go there
+};
+export type Notice = {
+  id: number; kind: "reminder" | "brief" | "system"; title: string; body: string;
+  reminder_id: number | null;        // an active reminder: Done / Snooze / Tomorrow
+  at: string; read: boolean;
+};
+export type NoticeList = { items: Notice[]; unread: number };
 
 /** True now that the web app reads the real backend: pages stop calling themselves "not connected". */
 export const BACKEND_CONNECTED = true;
@@ -135,6 +145,15 @@ export const addDevice = (subscription: PushSubscriptionJSON, label: string) =>
     { endpoint: subscription.endpoint, keys: subscription.keys, label });
 export const removeDevice = (id: number) => post<{ devices: Device[] }>(`push/subscriptions/${id}`, undefined, "DELETE");
 export const testNotification = () => post<PushTest>("push/test");
+
+/** The notification center (W6b): reminders and briefs, newest first. */
+export const getNotifications = () => get<NoticeList>("notifications");
+export const readNotifications = () => post<{ unread: number }>("notifications/read");
+/** Done, an hour later, or tomorrow: the same as the buttons under a reminder in Telegram. */
+export const reminderAction = (kind: "done" | "snooze" | "tomorrow", reminderId: number) =>
+  post<{ reply: string }>(`actions/${kind}/${reminderId}`);
+export const setTelegramNotifications = (on: boolean) =>
+  post<Preferences>("settings/telegram-notifications", { on });
 
 /** The sidebar listens for this: a new conversation, or a new message moving one to the top. */
 export const CONVERSATIONS_CHANGED = "sidekick:conversations-changed";

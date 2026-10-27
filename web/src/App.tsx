@@ -6,6 +6,7 @@ import Chat from "./pages/Chat";
 import Dashboard from "./pages/Dashboard";
 import Landing from "./pages/Landing";
 import NotFound from "./pages/NotFound";
+import NotificationsPage from "./pages/NotificationsPage";
 import Settings from "./pages/Settings";
 import SignIn from "./pages/SignIn";
 
@@ -23,6 +24,7 @@ export default function App() {
         <Route path="chat" element={<Chat />} />
         <Route path="chat/:id" element={<Chat />} />
         <Route path="apps" element={<Apps />} />
+        <Route path="notifications" element={<NotificationsPage />} />
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<NotFound />} />

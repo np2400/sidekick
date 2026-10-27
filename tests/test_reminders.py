@@ -29,7 +29,7 @@ class FakeTelegram:
     def __init__(self, ok=True, crash=False):
         self.sent, self.ok, self.crash = [], ok, crash
 
-    def __call__(self, chat_id, text, buttons=None):
+    def __call__(self, chat_id, text, buttons=None, **_):
         if self.crash:
             raise ConnectionError("network down")
         self.sent.append((chat_id, text, buttons))

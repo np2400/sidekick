@@ -77,7 +77,7 @@ def test_each_person_gets_the_brief_at_their_own_local_time(monkeypatch):
     sent = []
 
     def at(utc):
-        daily.tick(lambda chat_id, text: sent.append((chat_id, text)), now=utc, spawn=lambda job: job())
+        daily.tick(lambda chat_id, text, **_: sent.append((chat_id, text)), now=utc, spawn=lambda job: job())
 
     at(datetime(2026, 10, 25, 1, 35, tzinfo=timezone.utc))   # 07:05 in Kolkata, 18:35 the day before in LA
     at(datetime(2026, 10, 25, 15, 5, tzinfo=timezone.utc))   # 08:05 in LA, 20:35 in Kolkata

@@ -17,7 +17,7 @@ export function Logo({ size = 28, withName = true }: { size?: number; withName?:
 /** Shown on app pages while the web app is an early version, so nobody expects what isn't there yet. */
 export function PreviewPill() {
   return (
-    <span className="preview-pill" title="An early version: chat, photos, PDFs and test notifications work; reminders as notifications come next">
+    <span className="preview-pill" title="An early version: chat, photos, PDFs and notifications work">
       <span className="dot" aria-hidden="true" />
       <span>Preview<span className="pill-extra"> · early version</span></span>
     </span>

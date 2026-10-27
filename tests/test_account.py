@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from fastapi.testclient import TestClient
 
-from app import account, db, google_web, main, memory, native_tasks, reminders, settings, users, web_login
+from app import account, db, google_web, main, memory, native_tasks, notifications, reminders, settings, users, web_login
 from app.agent import PENDING
 from app.config import OWNER_TIMEZONE
 from app.db.store import log_action, save_trace
@@ -49,6 +49,8 @@ def fill(chat_id: int, name: str) -> None:
                      (chat_id, f"{name.lower()}@gmail.com"))
         conn.execute("INSERT INTO push_subscriptions (account_id, endpoint_hash, endpoint_encrypted, keys_encrypted, "
                      "device_label) VALUES (?, ?, 'LOCKED', 'LOCKED', ?)", (chat_id, f"hash-{chat_id}", f"{name}'s phone"))
+        conn.execute("INSERT INTO notification_settings (account_id, telegram) VALUES (?, 0)", (chat_id,))
+    notifications.record(chat_id, "reminder", f"{name}'s reminder went off", f"delivery:{name}")  # + its phone send
 
 
 @pytest.fixture(autouse=True)

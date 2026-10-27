@@ -10,13 +10,14 @@ import base64
 import binascii
 import json
 import logging
+from datetime import timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 
-from app import (daily, gmail, google_auth, google_web, jobs, memory, native_tasks, push, reminders, settings, uploads,
-                 users, vault, web_login)
+from app import (daily, gmail, google_auth, google_web, jobs, memory, native_tasks, notifications, push, reminders,
+                 settings, uploads, users, vault, web_login)
 from app.agent import PENDING, decide
 from app.config import TASK_BACKEND, TELEGRAM_OWNER_ID
 from app.trace import ToolContext
@@ -139,10 +140,19 @@ def job_status(job_id: int, account_id: int = Depends(signed_in)) -> dict:
     return {"status": found}
 
 
+# Done / Snooze / Tomorrow on a reminder: the same functions as the Telegram buttons, each checks it's yours.
+REMINDER_ACTIONS = {"done": lambda account, n: reminders.mark_done(n, account),
+                    "snooze": lambda account, n: reminders.snooze(n, account, timedelta(hours=1)),
+                    "tomorrow": lambda account, n: reminders.snooze(n, account, timedelta(days=1))}
+
+
 @router.post("/actions/{kind}/{action_id}", dependencies=[Depends(from_our_pages)])
 def act(kind: str, action_id: int, account_id: int = Depends(signed_in)) -> dict:
-    """✅ or ❌ under a proposal made on the web. Plain Python decides, exactly once (app/agent.py decide)."""
+    """✅ or ❌ under a proposal made on the web (plain Python decides, exactly once: app/agent.py decide), or Done /
+    Snooze / Tomorrow on a reminder (W6b)."""
     from app.main import context, web_role  # here: app.main imports this module
+    if kind in REMINDER_ACTIONS:
+        return {"reply": REMINDER_ACTIONS[kind](account_id, action_id)}
     conversation_id = PENDING.conversation_of(account_id, action_id)
     role = web_role(account_id)
     if kind not in ("approve", "reject") or conversation_id is None or role is None:
@@ -282,7 +292,33 @@ def connection_list(account_id: int = Depends(signed_in)) -> dict:
 @router.get("/settings")
 def preferences(account_id: int = Depends(signed_in)) -> dict:
     return {"timezone": settings.timezone_of(account_id),
-            "brief_time": daily.brief_time_for(account_id, _role(account_id)) or None}
+            "brief_time": daily.brief_time_for(account_id, _role(account_id)) or None,
+            "telegram": users.telegram_chat(account_id) is not None,
+            "telegram_notifications": notifications.telegram_on(account_id)}
+
+
+class TelegramChoice(BaseModel):
+    on: bool
+
+
+@router.post("/settings/telegram-notifications", dependencies=[Depends(from_our_pages)])
+def telegram_notifications(choice: TelegramChoice, account_id: int = Depends(signed_in)) -> dict:
+    """Also send reminders and the brief to Telegram? Off takes effect only while a device gets notifications."""
+    notifications.set_telegram(account_id, choice.on)
+    return preferences(account_id)
+
+
+# --- The notification center (W6b) ----------------------------------------------------------------------------
+
+@router.get("/notifications")
+def notification_list(account_id: int = Depends(signed_in)) -> dict:
+    return {"items": notifications.center(account_id), "unread": notifications.unread(account_id)}
+
+
+@router.post("/notifications/read", dependencies=[Depends(from_our_pages)])
+def notifications_read(account_id: int = Depends(signed_in)) -> dict:
+    notifications.mark_read(account_id)
+    return {"unread": 0}
 
 
 def _server_scopes() -> list[str]:

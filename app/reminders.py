@@ -1,4 +1,5 @@
-"""Built-in reminders: stored in SQLite, delivered to Telegram by an in-process scheduler.
+"""Built-in reminders: stored in SQLite, delivered by an in-process scheduler (to Telegram, the app's notification
+center and phones: app/main.py notify).
 
 Delivery is AT-LEAST-ONCE. Each send is claimed with a short lease; if the process dies mid-send, the lease
 expires and the reminder is re-sent once, marked "(resent)". A duplicate beats a missed reminder, and
@@ -227,7 +228,8 @@ def _deliver(row, send, now: datetime) -> bool:
     if row["lease_until"]:  # an earlier attempt was interrupted mid-send; it may have arrived
         text = "(resent) " + text
     try:
-        result = send(row["chat_id"], text, buttons=reminder_buttons(row["reminder_id"]))
+        result = send(row["chat_id"], text, buttons=reminder_buttons(row["reminder_id"]), kind="reminder",
+                      ref=f"delivery:{row['id']}", item=row["reminder_id"])  # for the app and phones (W6b)
     except Exception as exc:  # network trouble etc.: treat like a failed send
         result = {"ok": False, "description": type(exc).__name__}
 

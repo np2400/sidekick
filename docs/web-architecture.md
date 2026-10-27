@@ -314,7 +314,21 @@ devices that allowed notifications, with a test.
   404/410 from a push service marks a device `gone`; it's skipped until turned on again there.
 - Settings → Notifications explains what's needed where (iPhone: home screen first; blocked: where to allow).
 - VAPID keys: `docker compose exec -T sidekick python -m app.push keys >> .env` on the server, plus a copy.
-- W6b: reminders and the morning brief through the outbox below, the notification center, Done/Snooze/Tomorrow.
+
+**As built (W6b, migration 015):** reminders and the morning brief as notifications.
+- The scheduler's `send` is now `main.notify()`. It records the notification (center) and one send row per active
+  device in one transaction (`app/notifications.py`), then sends Telegram **as before** (`app/reminders.py` is
+  unchanged: its lease, retries and "(resent)"), unless Telegram notifications are off **and** a device gets them.
+  Not as planned above: Telegram stays on its proven path instead of moving into the outbox.
+- One notification per reference (`delivery:<id>`, `brief:<date>`): a Telegram retry of the same reminder doesn't
+  notify the phone again. A web-only account (no Telegram) gets its reminder in the app and on its phones.
+- The outbox (`notification_sends`) is sent by a scheduler job: failures retried after 1, 3 and 10 minutes, then
+  given up (the center keeps it). A gone or removed device is skipped. The phone shows a short version (160
+  characters) with the reminder's tag, so a snoozed reminder replaces its earlier notification.
+- The center: `GET /api/notifications`, `POST /api/notifications/read`; Done / 1 hour / Tomorrow through
+  `POST /api/actions/{done|snooze|tomorrow}/{reminder id}` (the Telegram buttons' functions). 30 days, encrypted.
+- `POST /api/settings/telegram-notifications`: on by default, so nothing changes for anyone until they choose.
+- Not yet: buttons on Android notifications themselves (iPhone has none); they open the center instead.
 
 **Limits to state honestly in the app:** delivery depends on the phone. Focus modes, battery savers, or removing
 permission can delay or block notifications, and iPhone needs the home-screen install. Notifications get tested on

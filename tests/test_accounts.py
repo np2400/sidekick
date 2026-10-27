@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import account, daily, db, google_web, main, memory, reminders, settings, users, vault
+from app import account, daily, db, google_web, main, memory, notifications, reminders, settings, users, vault
 from app.config import DB_PATH
 from app.db.rehearse import rehearse, snapshot
 from app.trace import AgentResult, ToolContext, Trace
@@ -297,27 +297,26 @@ def test_reminders_and_the_brief_reach_the_accounts_telegram_chat(bot, monkeypat
     monkeypatch.setattr(reminders, "clock", lambda: now)
     ctx = ToolContext(chat_id=WEB, user_id=str(WEB_TELEGRAM), role="member", tz="UTC")
     reminders.create_reminder("Stretch", "2026-10-21T17:05:00", ctx=ctx)
-    assert reminders.tick(main.send_to_account, now=now + timedelta(minutes=5)) == 1
+    assert reminders.tick(main.notify, now=now + timedelta(minutes=5)) == 1
     assert bot["sent"][-1] == (WEB_TELEGRAM, "⏰ Stretch")
 
     monkeypatch.setattr(daily, "TELEGRAM_OWNER_ID", str(OWNER))
     monkeypatch.setattr(daily, "build_brief", lambda days_ahead, ctx: f"Brief for {ctx.chat_id}")
     settings.set_timezone(WEB, "UTC")
     settings.set_brief_time(WEB, "08:00")
-    daily.tick(main.send_to_account, now=datetime(2026, 10, 21, 8, 5, tzinfo=timezone.utc), spawn=lambda job: job())
+    daily.tick(main.notify, now=datetime(2026, 10, 21, 8, 5, tzinfo=timezone.utc), spawn=lambda job: job())
     assert (WEB_TELEGRAM, f"☀️ Good morning!\n\nBrief for {WEB}") in bot["sent"]
 
 
-def test_an_account_without_telegram_gets_nothing_and_the_reminder_is_retried(bot, monkeypatch):
+def test_an_account_without_telegram_gets_its_reminder_in_the_app_never_in_someone_elses_chat(bot, monkeypatch):
     with db.connect() as conn:
         conn.execute("INSERT INTO accounts (id, name) VALUES (?, 'Web only')", (WEB,))
     now = datetime(2026, 10, 21, 17, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(reminders, "clock", lambda: now)
     reminders.create_reminder("Stretch", "2026-10-21T17:05:00", ctx=ToolContext(chat_id=WEB, tz="UTC"))
-    assert reminders.tick(main.send_to_account, now=now + timedelta(minutes=5)) == 0
+    assert reminders.tick(main.notify, now=now + timedelta(minutes=5)) == 1
     assert bot["sent"] == []  # nobody else's chat, not even one whose id is -7
-    with db.connect() as conn:
-        assert conn.execute("SELECT status FROM deliveries").fetchone()[0] == "pending"  # tried again later (W6: push)
+    assert [(n["title"], n["body"]) for n in notifications.center(WEB)] == [("⏰ Reminder", "Stretch")]  # (W6b)
 
 
 def test_buttons_act_on_the_accounts_reminders(bot, monkeypatch):
