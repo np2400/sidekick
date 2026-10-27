@@ -6,10 +6,12 @@ forecast or an alert shows something severe, one news search about it runs too (
 mentioned without being asked; calm days cost no search. Nothing about the user is sent, only the place.
 """
 import logging
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 
+from app.config import OWNER_TIMEZONE
 from app.web_search import web_search
 
 log = logging.getLogger("sidekick.weather")
@@ -31,9 +33,13 @@ CONDITIONS = {  # WMO weather codes, as Open-Meteo documents them
 UNAVAILABLE = "The weather service couldn't be reached. Tell the user; don't guess a forecast."
 
 
-def get_weather(place: str, days: int = 3) -> dict:
-    """Daily forecast, today first: high and low in °F and °C, chance of rain, conditions, strongest wind."""
-    days = max(1, min(int(days or 3), 16))
+def get_weather(place: str, days: int = 3, *, ctx=None) -> dict:
+    """Daily forecast, today first: high and low in °F and °C, chance of rain, conditions, strongest wind. Each day
+    says when it is for the person asking ("today", "tomorrow", "in 2 days"), worked out in their timezone.
+    At least 3 days, whatever `days` says: on Oct 27 a model asked for 1 day ("tomorrow" = 1?), got only today and
+    called it tomorrow. With tomorrow always there, labeled, that can't happen."""
+    days = max(3, min(int(days or 3), 16))
+    today = today_in(ctx.tz if ctx else OWNER_TIMEZONE)
     try:
         found = httpx.get(GEOCODE, params={"name": place, "count": 1, "language": "en"}, timeout=10)
         matches = (found.json().get("results") or []) if found.status_code == 200 else None
@@ -59,7 +65,7 @@ def get_weather(place: str, days: int = 3) -> dict:
         high, low = daily["temperature_2m_max"][i], daily["temperature_2m_min"][i]
         code, wind = daily["weather_code"][i], _round(daily["wind_speed_10m_max"][i])
         out.append({
-            "date": day, "weekday": date.fromisoformat(day).strftime("%A"),
+            "date": day, "weekday": date.fromisoformat(day).strftime("%A"), "when": when(date.fromisoformat(day), today),
             "high_f": _round(high), "low_f": _round(low), "high_c": _celsius(high), "low_c": _celsius(low),
             "rain_chance_pct": daily["precipitation_probability_max"][i],
             "conditions": CONDITIONS.get(code, "unknown"), "wind_max_mph": wind,
@@ -101,6 +107,17 @@ def _news(query: str) -> list[dict] | None:
     """A few recent news results about the warning (untrusted text, like any web result); None if search failed."""
     found = web_search(query, recent="week", max_results=3)
     return None if "error" in found else found["results"]
+
+
+def today_in(tz: str) -> date:
+    return datetime.now(ZoneInfo(tz)).date()  # tests replace this to fix "today"
+
+
+def when(day: date, today: date) -> str:
+    """A forecast day as the person asking would say it: "today", "tomorrow", "yesterday" (a place a day behind
+    them, e.g. Hawaii seen from India), or "in 3 days"."""
+    gap = (day - today).days
+    return {0: "today", 1: "tomorrow", -1: "yesterday"}.get(gap) or (f"in {gap} days" if gap > 0 else f"{-gap} days ago")
 
 
 def _round(value):

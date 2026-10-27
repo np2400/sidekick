@@ -292,15 +292,17 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "get_weather",
-        "description": "Weather forecast for a place, one entry per day starting today: high and low in °F and "
-                       "°C, chance of rain, conditions and wind (from Open-Meteo). Use it for any weather question.",
+        "description": "Weather forecast for a place, one entry per day starting today (at least 3 days): high and "
+                       "low in °F and °C, chance of rain, conditions and wind (from Open-Meteo). Each day's \"when\" "
+                       "says if it's today, tomorrow or later for the user: answer for the day they asked about. "
+                       "Use it for any weather question.",
         "parameters": {
             "type": "object",
             "properties": {
                 "place": {"type": "string", "description": "A city or town, optionally followed by a state or "
                                                           "country after a comma, e.g. 'Seattle', 'Pune, India'."},
-                "days": {"type": "integer", "description": "How many days from today, 1-16. Default 3 (today, "
-                                                           "tomorrow, the day after)."},
+                "days": {"type": "integer", "description": "How many days, starting today: 3-16. Default 3 (today, "
+                                                           "tomorrow, the day after). Ask for more only for later days."},
             },
             "required": ["place"],
         },
@@ -583,16 +585,19 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
                        undo_reminder_id=undo_id, sensitive=sensitive)
 
 
-DATE_NUDGE = ("(Check by Sidekick, not the user) A weekday in your answer doesn't match its date. Correct it, "
-              "keeping the date or the weekday you actually meant, and give your full answer again: ")
+# The user never sees a reply that's sent back, so the model mustn't apologize for it ("my last reply was wrong"
+# confused a reader who saw no earlier reply: Qwen in an eval, Oct 27).
+UNSEEN = " The user hasn't seen that draft: don't mention it or apologize, just give your answer."
+DATE_NUDGE = ("(Check by Sidekick, not the user) A weekday in your answer doesn't match its date." + UNSEEN +
+              " Correct it, keeping the date or the weekday you actually meant: ")
 
 # A reply may name a source only if the tool behind it ran for this message. On Oct 26 a fallback model skipped
 # get_weather four times, copied "(Forecast: Open-Meteo)" from earlier answers in the chat and invented the
 # numbers (and a "Friday Nov 7" that doesn't exist). The router can't see that: the model answered, it didn't fail.
 SOURCES = {"open-meteo": "get_weather", "open meteo": "get_weather"}
 GROUNDING_NUDGE = {"get_weather": "(Check by Sidekick, not the user) Your answer names Open-Meteo, but get_weather "
-                                  "wasn't called for this message, so those numbers aren't real. Call get_weather "
-                                  "now and answer only from what it returns."}
+                                  "wasn't called for this message, so those numbers aren't real." + UNSEEN +
+                                  " Call get_weather now and answer only from what it returns."}
 UNGROUNDED_REPLY = {"get_weather": "I couldn't get a real forecast just now, so I won't guess. Please ask again in "
                                    "a minute."}
 

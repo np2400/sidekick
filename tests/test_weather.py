@@ -1,5 +1,5 @@
 """The weather tool (Open-Meteo), the dates in the model's prompt, and /forget_all. Offline: HTTP is faked."""
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -44,6 +44,7 @@ def open_meteo(monkeypatch):
             raise status
         return httpx.Response(status, json=body)
     monkeypatch.setattr(weather.httpx, "get", fake_get)
+    monkeypatch.setattr(weather, "today_in", lambda tz: datetime(2026, 10, 26).date())  # the forecast's first day
     monkeypatch.setattr(weather, "web_search", lambda query, recent="", max_results=5: searches.append(query) or {
         "query": query, "results": [{"title": "Storm watch - KOMO News", "url": "https://komo.example", "snippet": "..."}]})
     answers["searches"] = searches
@@ -54,12 +55,28 @@ def test_a_forecast_has_real_numbers_in_both_units_for_the_place_found(open_mete
     asked, _ = open_meteo
     result = weather.get_weather("Seattle", days=2)
     assert result["place"] == "Seattle, Washington, United States" and result["source"] == "Open-Meteo"
-    assert result["days"][1] == {"date": "2026-10-27", "weekday": "Tuesday", "high_f": 52, "low_f": 44,
+    assert result["days"][1] == {"date": "2026-10-27", "weekday": "Tuesday", "when": "tomorrow", "high_f": 52, "low_f": 44,
                                  "high_c": 11, "low_c": 6,  # from the real 43.6°F, not the rounded 44
                                  "rain_chance_pct": 85, "conditions": "light rain",
                                  "wind_max_mph": None}  # a missing value stays missing, never invented
     assert asked[0][1]["name"] == "Seattle"  # only the place is sent
-    assert asked[1][1]["latitude"] == 47.6 and asked[1][1]["forecast_days"] == 2
+    assert asked[1][1]["latitude"] == 47.6 and asked[1][1]["forecast_days"] == 3  # never fewer than 3 days
+
+
+def test_asked_for_one_day_it_still_brings_tomorrow_labeled_for_the_person_asking(open_meteo, monkeypatch):
+    """Regression (Oct 27): a model asked days=1 for "tomorrow", got only today, and called it tomorrow."""
+    asked, _ = open_meteo
+    result = weather.get_weather("Seattle", days=1)
+    assert asked[1][1]["forecast_days"] == 3
+    assert [(d["date"], d["when"]) for d in result["days"]] == [("2026-10-26", "today"), ("2026-10-27", "tomorrow")]
+    monkeypatch.setattr(weather, "today_in", lambda tz: datetime(2026, 10, 27).date())  # e.g. India, already the 27th
+    assert [d["when"] for d in weather.get_weather("Seattle")["days"]] == ["yesterday", "today"]
+
+
+@pytest.mark.parametrize("gap, said", [(0, "today"), (1, "tomorrow"), (-1, "yesterday"), (3, "in 3 days"), (-2, "2 days ago")])
+def test_each_day_is_named_as_the_person_would_say_it(gap, said):
+    today = datetime(2026, 10, 27).date()
+    assert weather.when(today + timedelta(days=gap), today) == said
 
 
 def test_a_calm_us_forecast_checks_official_alerts_and_spends_no_search(open_meteo):

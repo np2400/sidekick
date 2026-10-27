@@ -7,6 +7,9 @@ from datetime import date, timedelta
 
 import httpx
 
+from app import weather
+from app.config import OWNER_TIMEZONE
+
 CRASHES = {"ReadTimeout": httpx.ReadTimeout, "ConnectError": httpx.ConnectError}
 
 
@@ -148,10 +151,10 @@ class FakeWorld:
             return error
         if not self.weather:
             return {"error": f"No place called '{place}' was found. Ask the user which city they mean."}
-        start = date.fromisoformat(self.weather["start"])
-        forecast = [{"date": (start + timedelta(days=i)).isoformat(),
-                     "weekday": (start + timedelta(days=i)).strftime("%A"), **day}
-                    for i, day in enumerate(self.weather["days"][:max(1, int(days or 3))])]
+        start, today = date.fromisoformat(self.weather["start"]), weather.today_in(OWNER_TIMEZONE)
+        forecast = [{"date": (start + timedelta(days=i)).isoformat(), "weekday": (start + timedelta(days=i)).strftime("%A"),
+                     "when": weather.when(start + timedelta(days=i), today), **day}
+                    for i, day in enumerate(self.weather["days"][:max(3, int(days or 3))])]  # as the real tool
         extras = {k: self.weather[k] for k in ("alerts", "alerts_source", "severe", "news") if k in self.weather}
         return {"place": self.weather["place"], "source": "Open-Meteo", "days": forecast, **extras}
 
