@@ -36,6 +36,9 @@ def fill(chat_id: int, name: str) -> None:
     settings.count_request(chat_id, "Asia/Kolkata")
     web_login.new_session(chat_id)
     web_login.link_code(chat_id)
+    with db.connect() as conn:  # a message answered earlier: its job stays a week, wiped of content
+        conn.execute("INSERT INTO jobs (account_id, channel, source_key, status, finished_at) "
+                     "VALUES (?, 'telegram', ?, 'done', datetime('now'))", (chat_id, f"telegram:old-{chat_id}"))
     with db.connect() as conn:
         conn.execute("INSERT INTO pending_links (token_hash, account_id, google_sub, expires_at) "
                      "VALUES (?, ?, ?, datetime('now', '+10 minutes'))", (f"pending-{chat_id}", chat_id, f"g-{name}"))

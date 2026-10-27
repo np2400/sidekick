@@ -4,6 +4,7 @@ import logging
 import httpx
 
 from app.config import TODOIST_API_TOKEN
+from app.external import maybe_applied
 
 log = logging.getLogger("sidekick.todoist")
 API = "https://api.todoist.com/api/v1"
@@ -19,13 +20,16 @@ def _request(method: str, path: str, **kwargs) -> dict:
         )
     except httpx.HTTPError as exc:
         log.error("Todoist network error: %s", type(exc).__name__)
+        if maybe_applied(method, exc=exc):  # sent, but the answer got lost: it may have happened
+            return {"error": "Todoist didn't answer in time.", "uncertain": True}
         return {"error": "Could not reach Todoist."}
 
     if response.status_code == 401:
         return {"error": "Todoist rejected the API token (401). Check TODOIST_API_TOKEN in .env."}
     if response.status_code >= 400:
         log.error("Todoist HTTP %s: %s", response.status_code, response.text[:200])
-        return {"error": f"Todoist returned HTTP {response.status_code}."}
+        return {"error": f"Todoist returned HTTP {response.status_code}.",
+                **({"uncertain": True} if maybe_applied(method, status=response.status_code) else {})}
     return response.json()
 
 

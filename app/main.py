@@ -12,7 +12,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from app import account, daily, db, google_web, memory, reminders, settings, users, web_api, web_login
+from app import account, daily, db, google_web, jobs, memory, reminders, settings, users, web_api, web_login
 from app.vault import VaultError
 from app.agent import PENDING, decide, handle_approval, run_agent
 from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
@@ -36,14 +36,18 @@ memory.import_legacy()  # once after W2 (and after a rollback): earlier messages
 
 @asynccontextmanager
 async def lifespan(_app):
-    """Start the reminder scheduler with the server, stop it on shutdown."""
-    scheduler = reminders.Scheduler(send_to_account, jobs=[daily.tick, memory.expire]) if SCHEDULER_ENABLED else None
-    _app.state.scheduler = scheduler  # /health checks it
-    if scheduler:
-        scheduler.start()
+    """Start the reminder scheduler and the job workers with the server, stop them on shutdown."""
+    scheduler = (reminders.Scheduler(send_to_account, jobs=[daily.tick, memory.expire, jobs.expire])
+                 if SCHEDULER_ENABLED else None)
+    workers = jobs.Workers(handle_telegram_job, deliver_telegram) if SCHEDULER_ENABLED else None
+    _app.state.scheduler, _app.state.workers = scheduler, workers  # /health checks them
+    for part in (scheduler, workers):
+        if part:
+            part.start()
     yield
-    if scheduler:
-        scheduler.stop()
+    for part in (workers, scheduler):
+        if part:
+            part.stop()
 
 
 app = FastAPI(title="Sidekick", lifespan=lifespan)
@@ -55,13 +59,34 @@ class EchoRequest(BaseModel):
     text: str = Field(min_length=1, max_length=500)
 
 
-@app.api_route("/health", methods=["GET", "HEAD"])  # uptime monitors often send HEAD
-def health(response: Response) -> dict[str, str]:
-    # Healthy means "can still deliver reminders", not just "the web server answers".
+def stalled() -> str | None:
+    """Healthy means "can still deliver reminders and answer messages", not just "the web server answers"."""
     scheduler = getattr(app.state, "scheduler", None)
     if scheduler and not scheduler.healthy():
+        return "reminder scheduler stalled"
+    workers = getattr(app.state, "workers", None)
+    if workers and not workers.healthy():  # messages would queue up unanswered
+        return "message workers stalled"
+    return None
+
+
+@app.api_route("/health", methods=["GET", "HEAD"])  # uptime monitors often send HEAD
+def health(response: Response) -> dict[str, str]:
+    if problem := stalled():
         response.status_code = 503
-        return {"status": "reminder scheduler stalled"}
+        return {"status": problem}
+    return {"status": "ok"}
+
+
+@app.get("/health/deep")  # for deploy/deploy.py on the server: Caddy passes only /health through, not this
+def deep_health(response: Response) -> dict[str, str]:
+    """/health, plus a test job through the real queue: a deploy whose workers can't process messages rolls back."""
+    problem = stalled()
+    if problem is None and getattr(app.state, "workers", None) and not jobs.canary():
+        problem = "message workers didn't process a test job"
+    if problem:
+        response.status_code = 503
+        return {"status": problem}
     return {"status": "ok"}
 
 
@@ -188,17 +213,13 @@ def telegram_webhook(
         x_telegram_bot_api_secret_token, TELEGRAM_WEBHOOK_SECRET
     ):
         raise HTTPException(status_code=401, detail="bad secret")
-
-    # 2. Dedupe: Telegram re-sends an update if our reply was slow or failed. Seen it? Ignore it.
-    #    Recorded in SQLite, so this holds across restarts too.
     update_id = update.get("update_id")
-    if update_id is not None and not first_time_seen(update_id):
-        log.info("Duplicate update %s ignored", update_id)
-        return {"ok": True}
 
-    # A button press (✅ / ❌ under a proposal) arrives as a callback_query, not a message.
+    # A button press (✅ / ❌ under a proposal) arrives as a callback_query, not a message. Instant, no AI:
+    # handled right here. Telegram re-sends an update if our answer was slow: seen it? Ignore it.
     if "callback_query" in update:
-        handle_button(update["callback_query"])
+        if update_id is None or first_time_seen(update_id):
+            handle_button(update["callback_query"])
         return {"ok": True}
 
     message = update.get("message") or {}
@@ -210,7 +231,7 @@ def telegram_webhook(
     log.info("Telegram update %s from %s (%d chars%s)", update_id, sender_id, len(text), ", photo" if photos else "")
     log.debug("Message text: %r", text)
 
-    # 3. Ignore anything that isn't text or a photo (stickers, voice, edits...).
+    # 2. Ignore anything that isn't text or a photo (stickers, voice, edits...).
     #    Still return 200, or Telegram keeps retrying the same update.
     if not (text or photos) or chat_id is None:
         return {"ok": True}
@@ -219,22 +240,61 @@ def telegram_webhook(
     if message.get("chat", {}).get("type", "private") != "private":
         return {"ok": True}
 
-    # 4. Authorize: the owner, or a member who joined with an invite. Strangers can only redeem an invite.
-    #    From here on, data is stored under the sender's account (ctx.chat_id); replies go to this Telegram chat.
-    command = text.strip().lower()
+    # 3. Authorize: the owner, or a member who joined with an invite. Strangers can only redeem an invite.
     found = who(sender_id)
     if found is None:
-        if command.startswith("/start") and sender_id.isdigit():
+        if text.strip().lower().startswith("/start") and sender_id.isdigit():
             send_message(chat_id, join(text, int(sender_id), message.get("from", {}).get("first_name", "")))
         else:
             log.warning("Ignoring stranger %s. If this is you, set TELEGRAM_OWNER_ID=%s in .env", sender_id, sender_id)
         return {"ok": True}
-    role, account_id = found
-    users.remember_name(account_id, message.get("from", {}).get("first_name", ""))  # e.g. the owner's: never stored
-    ctx = context(account_id, sender_id, role)
 
-    # 5. Approve: if a write is pending, this message is the user's yes/no.
-    # 6. Think: otherwise the model (via the router) decides whether to answer directly or call a Python tool.
+    # 4. Write it down as a job before answering Telegram (app/jobs.py): from here, a crash or a deploy can't lose
+    #    it. Telegram re-sends a message if we're slow: the same update id is queued once.
+    queued = jobs.enqueue(found[1], "telegram", f"telegram:{update_id if update_id is not None else secrets.token_hex(8)}",
+                          {"chat_id": chat_id, "sender_id": sender_id, "text": text, "photos": photos,
+                           "first_name": message.get("from", {}).get("first_name", "")})
+    if queued is None:
+        log.info("Duplicate update %s ignored", update_id)
+    elif getattr(app.state, "workers", None) is None:  # no worker threads (tests, a laptop): do it now
+        while jobs.work_once(handle_telegram_job, deliver_telegram):
+            pass
+    return {"ok": True}
+
+
+def handle_telegram_job(job: dict, done_before: list[str]) -> dict:
+    """The worker's side of a Telegram message: who it is now, then the answer (app/jobs.py calls this)."""
+    p = job["payload"]
+    found = who(p["sender_id"])  # checked again: someone removed while their message waited gets no answer
+    if found is None:
+        return {"text": None}
+    role, account_id = found
+    users.remember_name(account_id, p.get("first_name", ""))  # e.g. the owner's: never stored
+    ctx = context(account_id, p["sender_id"], role, job_id=job["id"])
+    if done_before:  # a retry of a message that already changed something: say what, don't ask the model again
+        pending = PENDING.peek(ctx.chat_id)
+        return {"text": "Done before a restart:\n" + "\n".join(f"• {e}" for e in done_before)
+                + ("\nReply yes or no to the proposal." if pending else ""),
+                "buttons": approval_buttons(pending["id"]) if pending else None}
+    reply, buttons = answer(ctx, role, p["chat_id"], p["text"], p["photos"])
+    return {"text": reply, "buttons": buttons}
+
+
+def deliver_telegram(job: dict, reply: dict) -> None:
+    """Send a job's reply. Raises if Telegram didn't take it, so the job is tried again."""
+    if not reply.get("text"):
+        return
+    result = send_message(job["payload"]["chat_id"], reply["text"], buttons=reply.get("buttons"))
+    if result is not None and not result.get("ok", True):
+        raise RuntimeError(f"Telegram didn't accept the reply: {result.get('description')}")
+
+
+def answer(ctx: ToolContext, role: str, chat_id: int, text: str, photos: list) -> tuple[str, list | None]:
+    """One message's answer: a command, a yes or no to a proposal, or the agent. Data is stored under the
+    sender's account (ctx.chat_id); `chat_id` is their Telegram chat (for /export's file)."""
+    command = text.strip().lower()
+    # Approve: if a write is pending, this message is the user's yes or no.
+    # Think: otherwise the model (via the router) decides whether to answer directly or call a Python tool.
     buttons = None
     if photos:
         if over_limit(ctx):
@@ -297,8 +357,7 @@ def telegram_webhook(
             reply = LIMIT_REPLY
         else:
             reply, buttons = agent_reply(ctx, text)
-    send_message(chat_id, reply, buttons=buttons)
-    return {"ok": True}
+    return reply, buttons
 
 
 LIMIT_REPLY = f"You've reached today's limit of {MEMBER_DAILY_LIMIT} messages. It resets at midnight."
@@ -412,11 +471,11 @@ def who(sender_id: str) -> tuple[str, int] | None:
     return ("member", account_id) if account_id is not None else None
 
 
-def context(account_id: int, sender_id: str, role: str) -> ToolContext:
+def context(account_id: int, sender_id: str, role: str, job_id: int | None = None) -> ToolContext:
     """Who this request is for. Built by the server from Telegram's sender, never from anything the model says."""
     google = google_web.connection(account_id) if role != "owner" else None  # the owner's Google is server-level
     return ToolContext(chat_id=account_id, user_id="owner" if role == "owner" else sender_id, role=role,
-                       tz=settings.timezone_of(account_id),
+                       tz=settings.timezone_of(account_id), job_id=job_id,
                        calendar=bool(google and google["calendar"]), gmail=bool(google and google["gmail"]))
 
 

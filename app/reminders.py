@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from app import db
+from app import db, jobs
 from app.config import OWNER_TIMEZONE, REMINDER_POLL_SECONDS
 from app.logging_setup import request_id
 
@@ -97,9 +97,10 @@ def create_reminder(text: str, remind_at: str, repeat: str = "none", *, ctx) -> 
         rid = conn.execute("INSERT INTO reminders (user_id, chat_id, text, repeat, tz) VALUES (?,?,?,?,?)",
                            (ctx.user_id, ctx.chat_id, text.strip(), repeat, ctx.tz)).lastrowid
         conn.execute("INSERT INTO deliveries (reminder_id, scheduled_for) VALUES (?,?)", (rid, to_db(when)))
-    repeats = "" if repeat == "none" else f", repeats {repeat}"
-    return {"summary": f"Reminder set: {text.strip()} ({label(when, ctx.tz)}{repeats})",
-            "reminder_id": rid, "when": label(when, ctx.tz)}
+        repeats = "" if repeat == "none" else f", repeats {repeat}"
+        summary = f"Reminder set: {text.strip()} ({label(when, ctx.tz)}{repeats})"
+        jobs.record_effect(conn, ctx.job_id, summary)  # same transaction: a retried message can't set it twice
+    return {"summary": summary, "reminder_id": rid, "when": label(when, ctx.tz)}
 
 
 def list_reminders(*, ctx) -> dict:
@@ -125,7 +126,7 @@ def reminders_between(chat_id: int, start: datetime, end: datetime) -> list[dict
 
 
 def cancel_reminder(reminder_id: int, *, ctx) -> dict:
-    message = _end(reminder_id, ctx.chat_id, "cancelled")
+    message = _end(reminder_id, ctx.chat_id, "cancelled", job_id=ctx.job_id)
     return {"summary": message} if message else {"error": f"No active reminder with id {reminder_id}."}
 
 
@@ -137,7 +138,7 @@ def _owned(conn, reminder_id: int, chat_id: int):
                         (reminder_id, chat_id)).fetchone()
 
 
-def _end(reminder_id: int, chat_id: int, status: str) -> str | None:
+def _end(reminder_id: int, chat_id: int, status: str, job_id: int | None = None) -> str | None:
     with db.connect() as conn:
         row = _owned(conn, reminder_id, chat_id)
         if row is None:
@@ -145,7 +146,9 @@ def _end(reminder_id: int, chat_id: int, status: str) -> str | None:
         conn.execute("UPDATE reminders SET status = ? WHERE id = ?", (status, reminder_id))
         conn.execute("UPDATE deliveries SET status = 'cancelled' WHERE reminder_id = ? AND status = 'pending'",
                      (reminder_id,))
-    return f"{'Cancelled' if status == 'cancelled' else 'Done'}: {row['text']}"
+        message = f"{'Cancelled' if status == 'cancelled' else 'Done'}: {row['text']}"
+        jobs.record_effect(conn, job_id, message)
+    return message
 
 
 def mark_done(reminder_id: int, chat_id: int) -> str:

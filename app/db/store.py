@@ -1,20 +1,33 @@
 """The only place that reads or writes Sidekick's tables (the "repository"). Everything else calls these."""
 import json
 
-from app import db
+from app import db, jobs
 
 
 class PendingStore:
     """Write actions waiting for the user's approval, one active per chat. Survives restarts."""
 
-    def stage(self, chat_id: int, user_id: str, tool: str, args: dict) -> int:
+    def stage(self, chat_id: int, user_id: str, tool: str, args: dict, job_id: int | None = None) -> int:
         with db.connect() as conn:
             # A new proposal replaces an older undecided one in the same chat.
             conn.execute("UPDATE pending_actions SET status='dropped', decided_at=datetime('now') "
                          "WHERE chat_id=? AND status='pending'", (chat_id,))
             cur = conn.execute("INSERT INTO pending_actions (user_id, chat_id, tool, args_json) VALUES (?,?,?,?)",
                                (user_id, chat_id, tool, json.dumps(args)))
+            jobs.record_effect(conn, job_id, f"Proposed {tool.replace('_', ' ')}, waiting for your yes or no")
             return cur.lastrowid
+
+    def interrupted(self, chat_id: int) -> str | None:
+        """An approval a restart cut off mid-way ('deciding' left behind): it may or may not have happened.
+        Reported once, then marked so."""
+        with db.connect() as conn:
+            row = conn.execute("SELECT id, tool FROM pending_actions WHERE chat_id=? AND status='deciding' "
+                               "ORDER BY id DESC LIMIT 1", (chat_id,)).fetchone()
+            if row is None:
+                return None
+            conn.execute("UPDATE pending_actions SET status='interrupted', decided_at=datetime('now') WHERE id=?",
+                         (row["id"],))
+            return row["tool"]
 
     def peek(self, chat_id: int) -> dict | None:
         with db.connect() as conn:
@@ -35,10 +48,13 @@ class PendingStore:
                                (current["id"],)).rowcount == 1
         return current if won else None
 
-    def finish(self, action_id: int, status: str) -> None:
+    def finish(self, action_id: int, status: str, job_id: int | None = None, effect: str = "") -> None:
+        """`effect`: what may have changed outside, recorded with the outcome so a retried job reports it."""
         with db.connect() as conn:
             conn.execute("UPDATE pending_actions SET status=?, decided_at=datetime('now') WHERE id=?",
                          (status, action_id))
+            if effect:
+                jobs.record_effect(conn, job_id, effect)
 
     def clear(self) -> None:
         with db.connect() as conn:

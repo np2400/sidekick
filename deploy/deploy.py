@@ -1,7 +1,7 @@
 """Pull-based continuous deployment, run on the server every 5 minutes by a systemd timer.
 
 CI moves the `production` branch to a commit only after the tests and the secret scan pass on main. This script
-notices when `production` moves, deploys that commit, checks /health, and rolls back if Sidekick doesn't come up.
+notices when `production` moves, deploys that commit, checks it (see healthy), and rolls back if it fails.
 Nothing outside reaches in: the server only pulls (no SSH from GitHub, no server keys stored in GitHub).
 
 Standard library only: it runs with the server's own python3, outside Docker.
@@ -9,11 +9,14 @@ Standard library only: it runs with the server's own python3, outside Docker.
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 HEALTH = "http://127.0.0.1:8000/health"
+DEEP = "http://127.0.0.1:8000/health/deep"  # a test job through the message queue (app/jobs.py canary)
+SOAK = 75  # seconds the new version must stay healthy: a worker that can't read the queue shows after 60
 WEB = REPO / "web"
 # Sidekick Web: web/ is built into web/dist, which Caddy serves at /app. In a throwaway Node container, so the
 # server needs no Node; as uid 1000 (ubuntu here, "node" in the image), so the files stay the deploy user's.
@@ -31,18 +34,37 @@ class Shell:
         return subprocess.run(cmd, cwd=REPO, capture_output=True).returncode == 0
 
 
-def healthy(wait: float = 90, sleep=time.sleep) -> bool:
-    """Wait for the new container to answer /health (it restarts during the deploy)."""
-    deadline = time.monotonic() + wait
-    while time.monotonic() < deadline:
-        try:
-            with urllib.request.urlopen(HEALTH, timeout=3) as response:
-                if response.status == 200:
-                    return True
-        except OSError:
-            pass
+def status_of(url: str, timeout: float = 3) -> int | None:
+    """The HTTP status of a GET, or None if nothing answered."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return response.status
+    except urllib.error.HTTPError as exc:  # e.g. 503 from an unhealthy Sidekick
+        return exc.code
+    except OSError:
+        return None
+
+
+def healthy(wait: float = 90, soak: float = SOAK, sleep=time.sleep, status=status_of, clock=time.monotonic) -> bool:
+    """The new version passes when it 1) answers /health within `wait` (it restarts during the deploy), 2) gets
+    a test job through the message queue, and 3) stays healthy for `soak` seconds. Answering once isn't enough:
+    the workers might fail a few seconds later."""
+    deadline = clock() + wait
+    while status(HEALTH) != 200:
+        if clock() >= deadline:
+            print("Health check: /health didn't answer 200 in time")
+            return False
         sleep(5)
-    return False
+    if status(DEEP, timeout=30) != 200:
+        print("Health check: a test job didn't get through the message queue")
+        return False
+    end = clock() + soak
+    while clock() < end:
+        sleep(5)
+        if (code := status(HEALTH)) != 200:
+            print(f"Health check: /health answered {code} during the {soak:.0f}s watch")
+            return False
+    return True
 
 
 def deploy(sh: Shell, healthy=healthy, failed_file: Path = REPO / ".deploy-failed",

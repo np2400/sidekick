@@ -2,7 +2,7 @@
 
 Same tool names and result shapes as app/todoist.py, so the agent, prompts and evals don't change.
 """
-from app import db
+from app import db, jobs
 
 
 def create_task(content: str, due_string: str = "", *, ctx) -> dict:
@@ -30,4 +30,5 @@ def complete_task(task_id: int, *, ctx) -> dict:
         if row is None:
             return {"error": f"No open task with id {task_id}."}
         conn.execute("UPDATE tasks SET status = 'done', done_at = datetime('now') WHERE id = ?", (task_id,))
+        jobs.record_effect(conn, ctx.job_id, f"Completed task: {row['title']}")
     return {"summary": f"Completed task: {row['title']}"}

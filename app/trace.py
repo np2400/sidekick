@@ -21,6 +21,7 @@ class ToolContext:
     tz: str = OWNER_TIMEZONE  # the user's timezone: "9am" means 9am where they are
     calendar: bool = False    # a member who connected their own Google Calendar (/connect)
     gmail: bool = False       # ...and their own Gmail, read-only (/connect gmail)
+    job_id: int | None = None  # the queued message being answered (app/jobs.py): writes record their effects
 
 
 @dataclass

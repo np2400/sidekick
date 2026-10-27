@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from deploy.deploy import WEB_BUILD, deploy
+from deploy.deploy import DEEP, HEALTH, REPO, SOAK, WEB_BUILD, deploy, healthy
 
 OLD, NEW = "a" * 40, "b" * 40
 
@@ -132,3 +132,48 @@ def test_a_web_build_that_fails_rolls_back_and_rebuilds_the_working_version(fail
     assert deploy(sh, healthy=lambda: True, failed_file=failed_file, web_built=built) == f"rolled back {NEW[:7]}"
     assert sh.ran("git", "reset", "-q", "--hard", OLD) and len(sh.ran(*WEB_BUILD)) == 2  # new failed, old rebuilt
     assert failed_file.read_text() == NEW and "failed" in sh.notified()[-1]
+
+
+# --- The health check that decides between "deployed" and "rolled back" ------------------------------------------
+
+class Server:
+    """A fake server on a fake clock: answers(path, second) gives the HTTP status at that moment."""
+    def __init__(self, answers):
+        self.answers, self.now, self.asked = answers, 0.0, []
+
+    def status(self, url, timeout=3):
+        self.asked.append(url)
+        return self.answers("deep" if url == DEEP else "health", self.now)
+
+    def check(self):
+        return healthy(sleep=self.wait, status=self.status, clock=lambda: self.now)
+
+    def wait(self, seconds):
+        self.now += seconds
+
+
+def test_a_healthy_version_passes_the_deep_check_and_stays_healthy_for_the_whole_watch():
+    server = Server(lambda path, t: 200 if t >= 10 else None)  # up after 10 s (the restart)
+    assert server.check() is True
+    assert server.asked.count(DEEP) == 1 and server.now >= 10 + SOAK
+
+
+def test_workers_that_cant_process_messages_fail_the_deploy_though_health_says_200():
+    server = Server(lambda path, t: 503 if path == "deep" else 200)
+    assert server.check() is False
+
+
+def test_workers_that_stall_a_minute_after_the_restart_fail_the_deploy():
+    """Regression for the W4 review: the old check stopped at the first 200, so this deploy would have stayed."""
+    server = Server(lambda path, t: 503 if path == "health" and t >= 60 else 200)
+    assert server.check() is False
+
+
+def test_a_version_that_never_answers_fails_after_the_wait():
+    server = Server(lambda path, t: None)
+    assert server.check() is False and HEALTH in server.asked and DEEP not in server.asked
+
+
+def test_the_deep_check_is_only_reachable_from_the_server_itself():
+    caddy = (REPO / "caddy" / "Caddyfile").read_text()
+    assert "handle /health {" in caddy and "/health*" not in caddy and "/health/" not in caddy

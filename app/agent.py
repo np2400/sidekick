@@ -344,7 +344,7 @@ def run_tool(name: str, args: dict, ctx: ToolContext, tools: dict) -> dict:
         problem = check(**args) if check else None
         if problem:
             return {"error": problem}
-        PENDING.stage(ctx.chat_id, ctx.user_id, name, args)
+        PENDING.stage(ctx.chat_id, ctx.user_id, name, args, job_id=ctx.job_id)
         return {"status": "awaiting_owner_approval", "will_run": {"tool": name, "args": args}}
     return _safely(name, tool, args, ctx)
 
@@ -382,11 +382,18 @@ YES = {"yes", "y", "ok", "okay", "approve", "do it", "👍"}
 NO = {"no", "n", "cancel", "stop", "👎"}
 
 
+def interrupted_reply(tool: str) -> str:
+    return (f"⚠️ I restarted while doing that ({tool.replace('_', ' ')}), so I can't tell whether it went "
+            "through. Please check before asking again.")
+
+
 def handle_approval(ctx: ToolContext, text: str, tools: dict | None = None) -> str | None:
     """A typed reply while something is pending. Returns a reply if it answered the request, otherwise None."""
-    if PENDING.peek(ctx.chat_id) is None:
-        return None
     answer = text.strip().lower().rstrip(".!")
+    if PENDING.peek(ctx.chat_id) is None:
+        if answer in YES and (stuck := PENDING.interrupted(ctx.chat_id)):  # this "yes", retried after a restart
+            return interrupted_reply(stuck)
+        return None
     if answer in YES:
         return decide(ctx, approve=True, tools=tools)
     if answer in NO:
@@ -404,10 +411,15 @@ def decide(ctx: ToolContext, approve: bool, action_id: int | None = None, tools:
 
     `action_id` comes from a button: it must match the CURRENT proposal, so an old button can't approve
     a newer action. Two taps (or a retried request) race for claim(); only one wins.
+    Nothing here is ever retried automatically. When nobody can tell whether it happened (the service didn't
+    answer, or its answer couldn't be read), the reply says so instead of "failed", which would invite a
+    second try and a duplicate.
     """
     tools = tools_for(ctx) if tools is None else tools  # a member's approval runs a member's tool
     pending = PENDING.claim(ctx.chat_id, action_id)
     if pending is None:
+        if stuck := PENDING.interrupted(ctx.chat_id):  # a restart hit mid-approval: say so, don't guess
+            return interrupted_reply(stuck)
         return "That request was already handled or replaced."
     if not approve:
         PENDING.finish(pending["id"], "rejected")
@@ -416,13 +428,23 @@ def decide(ctx: ToolContext, approve: bool, action_id: int | None = None, tools:
         return "Cancelled. Nothing was created."
     log.info("Owner approved %s(%s)", pending["name"], ", ".join(sorted(pending["args"])))
     log.debug("Approved args: %s", json.dumps(pending["args"]))
-    result = _safely(pending["name"], tools[pending["name"]], pending["args"], ctx)
+    tool, what = tools[pending["name"]], pending["name"].replace("_", " ")
+    try:
+        result = tool(**_with_ctx(tool, pending["args"], ctx))
+    except Exception as exc:  # e.g. the service's answer couldn't be read: the request may have worked anyway
+        log.error("Approved %s crashed: %s", pending["name"], type(exc).__name__)
+        result = {"error": f"Something broke after I sent it ({type(exc).__name__}).", "uncertain": True}
     log.info("Approved %s returned %s", pending["name"], json.dumps(log_safe(result)))
-    if "error" in result:
+    if result.get("uncertain"):
+        PENDING.finish(pending["id"], "uncertain", ctx.job_id, f"Not sure whether this went through: {what}")
+        log_action(ctx.user_id, ctx.chat_id, "uncertain", pending["name"], result["error"][:200])
+        return (f"⚠️ {result['error']} I can't tell whether it went through ({what}). "
+                "Please check before asking again.")
+    if "error" in result:  # the service said no, or was never reached: nothing happened
         PENDING.finish(pending["id"], "failed")
         log_action(ctx.user_id, ctx.chat_id, "failed", pending["name"], result["error"][:200])
         return f"❌ {result['error']}"
-    PENDING.finish(pending["id"], "executed")
+    PENDING.finish(pending["id"], "executed", ctx.job_id, result["summary"])
     log_action(ctx.user_id, ctx.chat_id, "executed", pending["name"], result.get("summary"))
     return f"✅ {result['summary']}"  # built from the API's real response, not the LLM
 

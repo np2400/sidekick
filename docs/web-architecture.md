@@ -336,6 +336,27 @@ jobs (id, account_id, conversation_id, channel, source_key UNIQUE, payload_json,
 7. **Deploys:** on shutdown the worker stops claiming new jobs, and running ones get time to finish
    (`stop_grace_period` in compose).
 
+**As built (W4, `app/jobs.py`, migration 012):**
+- Telegram messages from people who may use Sidekick become jobs; strangers and buttons are still handled at
+  once (no AI involved).
+- Two worker threads run inside the app, started with the reminder scheduler. `/health` fails if one dies, or
+  can't read the queue for a minute (its heartbeat only counts after a successful claim).
+- **Deploy check** (`deploy/deploy.py`): the new version must answer `/health`, get a test job through the real
+  queue (`/health/deep`, which Caddy doesn't expose), and then stay healthy for 75 seconds. Otherwise it rolls back.
+  A failure after those 75 seconds isn't rolled back, since it may not be the deploy's fault. Instead `/health`
+  turns 503, UptimeRobot alerts, and Docker marks the container unhealthy.
+- With no worker threads (tests, a laptop), the webhook processes the job straight away, through the same code.
+- The message and reply are stored encrypted and wiped when the job ends; finished jobs are deleted after a week.
+- A job's log lines keep the id of the request that queued it.
+- **Dropped:** the Calendar event id. An approval is claimed once (`pending` → `deciding`) and never run again,
+  so a second insert can't happen. An approval cut off by a restart is reported as "I can't tell whether it
+  went through", whether the retry comes as a typed yes or a button.
+- **Uncertain is not failed** (`app/external.py`): a write that may have reached Calendar or Todoist is reported
+  as "I can't tell whether it went through, please check" and marked `uncertain`, never "❌ failed", which
+  would invite a second try. That covers a timeout or dropped connection after sending, a 5xx, and a crash
+  reading the answer. Only errors before sending (no connection, a failed sign-in refresh) and a 4xx are
+  failures. The outcome is recorded with the job, so a retry after a crash reports it instead of asking again.
+
 **Why not Redis, Celery or SQS:** there's one server, and SQLite is already the source of truth and backed up. The
 queue lives in the same database as the data it changes. Revisit this when there's more than one app server.
 
@@ -395,7 +416,7 @@ Each milestone is: build → the owner tries it live → explain → next. Size:
 | W2 | Conversation threads, 30-day encrypted history, per-thread memory, `/new` and `/forget all`; Telegram history moved in (010); privacy policy updated first | Telegram behaves as before; `/new` starts a fresh thread; `/export` shows your threads | M |
 | W3a | Google sign-in (`openid email` only, no tokens kept), sessions, `/web` linking with a confirm page, `/signout_web`, `/api/me` (migration 011) | `/web` in Telegram, sign in on your phone, see "Linked ✅ … as Neel" | M |
 | W3b | Read-only web app at `/app`: **your real history (including Telegram threads)**, reminders, tasks, connections. The main address keeps the current home page | Open the app, see your own Telegram conversations; your dad sees only his | M |
-| W4 | Durable jobs; Telegram moves onto the queue                                                   | Restart the server mid-answer; the reply still arrives          | M    |
+| W4 | Durable jobs; Telegram moves onto the queue (migration 012)                                    | Restart the server mid-answer; the reply still arrives          | M    |
 | W5 | **Real web chat:** new chats, continue any thread (including Telegram ones), approvals, photo and PDF upload | A real conversation on the web, continued from a Telegram thread, approved on the web | L |
 | W6 | **Installable app and Web Push:** manifest, service worker, device subscriptions, notification center, outbox with retries, Done/Snooze/Tomorrow, brief notifications, Telegram notifications optional | Install on your iPhone; close the app; a reminder arrives; tap Done | L |
 | W7 | Connect Calendar/Gmail from the web, link Telegram from the web, web invites, cross-account security pass, export and delete on the web, launch checklist (§13) | A new tester joins from the web only and gets reminders without Telegram | M |

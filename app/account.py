@@ -16,15 +16,15 @@ PERSONAL = {  # table -> column holding the person's account id (chat_id means a
     "pending_actions": "chat_id", "traces": "chat_id", "settings": "chat_id", "usage": "chat_id",
     "daily_runs": "chat_id", "google_accounts": "chat_id", "oauth_states": "chat_id",
     "accounts": "id", "identities": "account_id", "conversations": "account_id", "chat_messages": "account_id",
-    "sessions": "account_id", "link_codes": "account_id", "pending_links": "account_id",
+    "sessions": "account_id", "link_codes": "account_id", "pending_links": "account_id", "jobs": "account_id",
     # Legacy, kept for rollback: these hold the Telegram id, which equals the account id for every account
     # born in Telegram (the only kind until W3, when web-born accounts arrive and `users` stops being written).
     "users": "telegram_id", "invites": "used_by",
 }
-# deliveries belong to a reminder (reminder_id), so they go with the person's reminders.
+# deliveries belong to a reminder (reminder_id), so they go with the person's reminders; job_effects with jobs.
 SECRET_COLUMNS = {"google_accounts": {"token_encrypted"},   # never exported: the export file is not a vault
                   "sessions": {"token_hash"}}
-NOT_EXPORTED = {"oauth_states", "link_codes", "pending_links"}  # sign-ins in progress: short-lived internals
+NOT_EXPORTED = {"oauth_states", "link_codes", "pending_links", "jobs"}  # short-lived internals (jobs: wiped)
 READABLE = {"conversations": ("title_encrypted", "title"), "chat_messages": ("text_encrypted", "text")}  # your own words
 
 
@@ -61,6 +61,8 @@ def delete_everything(chat_id: int) -> int:
     with db.connect() as conn:  # one transaction: all or nothing
         removed = conn.execute("DELETE FROM deliveries WHERE reminder_id IN "
                                "(SELECT id FROM reminders WHERE chat_id = ?)", (chat_id,)).rowcount
+        removed += conn.execute("DELETE FROM job_effects WHERE job_id IN (SELECT id FROM jobs WHERE account_id = ?)",
+                                (chat_id,)).rowcount
         for table, column in PERSONAL.items():
             removed += conn.execute(f"DELETE FROM {table} WHERE {column} = ?", (chat_id,)).rowcount
     log.info("Deleted all data for %s (%d rows)", chat_id, removed)

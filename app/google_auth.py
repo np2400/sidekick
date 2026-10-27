@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import httpx
 
 from app.config import DATA_DIR
+from app.external import maybe_applied
 from app.vault import VaultError
 
 log = logging.getLogger("sidekick.google")
@@ -141,11 +142,17 @@ def google_request(method: str, url: str, service: str, ctx=None, **kwargs) -> d
     """Shared by Calendar and Gmail: auth header, timeout, and errors the model can relay."""
     try:
         token = token_for(ctx)  # refreshes behind the scenes when the 1-hour token expires
-        response = httpx.request(method, url, headers={"Authorization": f"Bearer {token}"}, timeout=15, **kwargs)
     except (GoogleAuthError, VaultError) as exc:
         return {"error": str(exc)}
+    except httpx.HTTPError as exc:  # the refresh failed: the request itself was never sent
+        log.error("Google token refresh network error: %s", type(exc).__name__)
+        return {"error": f"Could not reach {service}."}
+    try:
+        response = httpx.request(method, url, headers={"Authorization": f"Bearer {token}"}, timeout=15, **kwargs)
     except httpx.HTTPError as exc:
         log.error("%s network error: %s", service, type(exc).__name__)
+        if maybe_applied(method, exc=exc):  # sent, but the answer got lost: it may have happened
+            return {"error": f"{service} didn't answer in time.", "uncertain": True}
         return {"error": f"Could not reach {service}."}
     if response.status_code == 403:
         # Most often: this scope wasn't granted yet (e.g. Gmail added after the first sign-in).
@@ -153,7 +160,8 @@ def google_request(method: str, url: str, service: str, ctx=None, **kwargs) -> d
         return {"error": f"Google denied access to {service} (403). Re-run: .venv/bin/python -m app.google_auth"}
     if response.status_code >= 400:
         log.error("%s HTTP %s: %s", service, response.status_code, response.text[:200])
-        return {"error": f"{service} returned HTTP {response.status_code}."}
+        return {"error": f"{service} returned HTTP {response.status_code}.",
+                **({"uncertain": True} if maybe_applied(method, status=response.status_code) else {})}
     return response.json()
 
 
