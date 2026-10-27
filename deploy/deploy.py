@@ -14,6 +14,11 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 HEALTH = "http://127.0.0.1:8000/health"
+WEB = REPO / "web"
+# Sidekick Web: web/ is built into web/dist, which Caddy serves at /app. In a throwaway Node container, so the
+# server needs no Node; as uid 1000 (ubuntu here, "node" in the image), so the files stay the deploy user's.
+WEB_BUILD = ("docker", "run", "--rm", "--user", "1000:1000", "-v", f"{WEB}:/web", "-w", "/web",
+             "node:20.18.1-alpine", "sh", "-c", "npm ci --no-audit --no-fund && npm run build")
 
 
 class Shell:
@@ -40,7 +45,8 @@ def healthy(wait: float = 90, sleep=time.sleep) -> bool:
     return False
 
 
-def deploy(sh: Shell, healthy=healthy, failed_file: Path = REPO / ".deploy-failed") -> str:
+def deploy(sh: Shell, healthy=healthy, failed_file: Path = REPO / ".deploy-failed",
+           web_built: Path = WEB / "dist" / "index.html") -> str:
     sh.run("git", "fetch", "-q", "origin", "production")
     current, target = sh.run("git", "rev-parse", "HEAD"), sh.run("git", "rev-parse", "origin/production")
     if current == target:
@@ -50,9 +56,13 @@ def deploy(sh: Shell, healthy=healthy, failed_file: Path = REPO / ".deploy-faile
     if failed_file.exists() and failed_file.read_text().strip() == target:
         return "skipped: this version failed before"  # don't retry a broken version every 5 minutes
     subject = sh.run("git", "log", "-1", "--format=%s", target)
+    # The web app is rebuilt only when web/ changed (or was never built): it takes a minute on this small server.
+    build_web = not web_built.exists() or not sh.succeeds("git", "diff", "--quiet", current, target, "--", "web")
 
     sh.run("git", "merge", "--ff-only", "-q", target)
     try:
+        if build_web:
+            sh.run(*WEB_BUILD)
         sh.run("docker", "compose", "up", "-d", "--build")
         ok = healthy()
     except subprocess.CalledProcessError:  # e.g. the image didn't build: the old container is still running
@@ -64,6 +74,8 @@ def deploy(sh: Shell, healthy=healthy, failed_file: Path = REPO / ".deploy-faile
 
     sh.run("git", "reset", "-q", "--hard", current)  # back to the version that worked
     try:
+        if build_web:
+            sh.run(*WEB_BUILD)  # ...and its web app
         sh.run("docker", "compose", "up", "-d", "--build")
     except subprocess.CalledProcessError:
         pass

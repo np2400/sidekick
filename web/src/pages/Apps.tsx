@@ -1,4 +1,4 @@
-import { getConnections } from "../api";
+import { getConnections, type Connections } from "../api";
 import { PageHeader, Skeleton, TelegramHint } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
 import { useResult } from "../useResult";
@@ -25,18 +25,33 @@ const GOOGLE_APPS: AppCard[] = [
   },
 ];
 
+/** "Connected · you@gmail.com", "Connected · server setup" or "Not connected", from the real connection. */
+function status(id: string, c: Connections | null): { on: boolean; label: string } {
+  if (!c) return { on: false, label: "Not connected" };
+  const on = id === "calendar" ? c.google.calendar : c.google.gmail;
+  const whose = c.google.managed === "server" ? "server setup" : c.google.email ?? "";
+  return on ? { on, label: whose ? `Connected · ${whose}` : "Connected" } : { on, label: "Not connected" };
+}
+
 export default function Apps() {
   const connections = useResult(getConnections);
+  const data = connections?.state === "ready" ? connections.data : null;
 
   return (
     <div className="page">
       <PageHeader title="Connected apps"
         subtitle="Sidekick only uses the accounts you connect, and asks before creating anything." />
 
-      {connections === null ? <Skeleton /> : connections.state === "unavailable" && (
+      {connections === null ? <Skeleton /> : connections.state === "unavailable" ? (
         <div className="notice static">
           <Icon name="info" size={18} />
-          <p>{connections.reason} Calendar and Gmail are separate connections: you choose each one.</p>
+          <p>{connections.reason}</p>
+        </div>
+      ) : (
+        <div className="notice static">
+          <Icon name="info" size={18} />
+          <p>Calendar and Gmail are separate connections: you choose each one. Connecting from the web comes in a
+            later step; today use the Telegram commands below.</p>
         </div>
       )}
 
@@ -49,7 +64,9 @@ export default function Apps() {
                 <h2>{app.name}</h2>
                 <div className="badges">
                   {app.readOnly && <span className="badge">Read-only</span>}
-                  <span className="badge badge-off"><span className="dot" aria-hidden="true" />Not connected</span>
+                  <span className={`badge ${status(app.id, data).on ? "badge-on" : "badge-off"}`}>
+                    <span className="dot" aria-hidden="true" />{status(app.id, data).label}
+                  </span>
                 </div>
               </div>
             </header>
@@ -74,7 +91,8 @@ export default function Apps() {
             <span className="app-icon tone-sky"><Icon name="send" size={22} /></span>
             <div className="app-title">
               <h2>Telegram</h2>
-              <div className="badges"><span className="badge badge-on"><span className="dot" aria-hidden="true" />Available now</span></div>
+              <div className="badges"><span className="badge badge-on"><span className="dot" aria-hidden="true" />
+                {data?.telegram ? "Linked to your account" : "Available now"}</span></div>
             </div>
           </header>
           <p className="muted">

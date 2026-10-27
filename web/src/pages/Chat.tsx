@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
-import { sendMessage, type Unavailable } from "../api";
-import { TelegramHint } from "../components/Common";
+import { useCallback, useEffect, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { useParams } from "react-router-dom";
+import { getConversation, sendMessage, type Unavailable } from "../api";
+import { EmptyState, Skeleton, TelegramHint } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
+import { useResult } from "../useResult";
 
 /** Ideas only fill the composer: they show what to ask, they are not conversations. */
 const IDEAS: { icon: IconName; text: string }[] = [
@@ -16,11 +18,44 @@ const MAX_MB = 10;
 
 type Attachment = { id: string; file: File; preview?: string };
 
+const when = (iso: string) =>
+  new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric",
+                                            minute: "2-digit" });
+
+/** One saved conversation, read-only: exactly what was said, in Telegram or here. */
+function Thread({ id }: { id: string }) {
+  const load = useCallback(() => getConversation(id), [id]);
+  const result = useResult(load);
+  if (result === null) return <div className="thread"><Skeleton lines={6} /></div>;
+  if (result.state !== "ready") {
+    return <EmptyState icon="history" title="Couldn't open this conversation"
+      body={result.state === "unavailable" ? result.reason : "Sign in to see your conversations."} />;
+  }
+  const thread = result.data;
+  return (
+    <div className="thread">
+      <header className="thread-head">
+        <h1>{thread.title}</h1>
+        <p className="muted small">
+          {thread.origin === "telegram" ? "Started in Telegram" : "Started here"} · kept for 30 days after the last message
+        </p>
+      </header>
+      {thread.messages.map((m, i) => (
+        <div key={i} className={`msg ${m.role}`}>
+          <div className="msg-bubble">{m.text}</div>
+          <span className="msg-meta">{m.channel === "telegram" ? "Telegram · " : ""}{when(m.at)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function formatSize(bytes: number) {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export default function Chat() {
+  const { id } = useParams();
   const [text, setText] = useState("");
   const [files, setFiles] = useState<Attachment[]>([]);
   const [notice, setNotice] = useState<Unavailable | null>(null);
@@ -90,12 +125,12 @@ export default function Chat() {
       onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
       onDrop={onDrop}>
       <div className="chat-scroll">
-        <div className="chat-welcome">
+        {id ? <Thread id={id} /> : <div className="chat-welcome">
           <span className="welcome-mark"><Icon name="sparkles" size={26} /></span>
           <h1>What can I help with?</h1>
           <p className="muted">
-            Ask about your calendar, email, reminders and tasks, or send a photo or PDF.
-            This web app is a preview and isn't connected to the assistant yet.
+            Ask about your calendar, email, reminders and tasks, or send a photo or PDF. Your conversations,
+            including the ones in Telegram, are listed on the left; sending from the web comes in the next step.
           </p>
           <div className="ideas">
             {IDEAS.map((idea) => (
@@ -106,7 +141,7 @@ export default function Chat() {
               </button>
             ))}
           </div>
-        </div>
+        </div>}
       </div>
 
       <div className="composer-wrap">
@@ -155,7 +190,7 @@ export default function Chat() {
         </form>
         {problem && <p className="composer-problem" role="alert">{problem}</p>}
         <p className="composer-foot">
-          Preview: messages aren't sent yet. <TelegramHint>message @Np_Sidekick_bot</TelegramHint>
+          Read-only preview: sending from the web comes next. <TelegramHint>message @Np_Sidekick_bot</TelegramHint>
         </p>
       </div>
 

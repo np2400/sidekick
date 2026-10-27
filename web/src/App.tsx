@@ -9,16 +9,19 @@ import NotFound from "./pages/NotFound";
 import Settings from "./pages/Settings";
 import SignIn from "./pages/SignIn";
 
+/** Only /app/... is served on the real domain (Caddy, from the build). The landing page at / is local-only until
+ *  it's updated: the domain's home page stays the simple one in site/. */
 export default function App() {
   return (
     <Routes>
       <Route element={<PublicLayout />}>
         <Route index element={<Landing />} />
-        <Route path="signin" element={<SignIn />} />
       </Route>
+      <Route path="app/signin" element={<SignIn />} />
       <Route path="app" element={<AppLayout />}>
         <Route index element={<Dashboard />} />
         <Route path="chat" element={<Chat />} />
+        <Route path="chat/:id" element={<Chat />} />
         <Route path="apps" element={<Apps />} />
         <Route path="settings" element={<Settings />} />
       </Route>

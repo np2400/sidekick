@@ -80,6 +80,15 @@ def active_members(owner_account: int | None) -> list[int]:
                                            (owner_account,))]
 
 
+def profile(account_id: int) -> dict:
+    """{"name", "logins": {provider: label}}: e.g. {"telegram": "", "google": "you@gmail.com"}."""
+    with db.connect() as conn:
+        name = conn.execute("SELECT name FROM accounts WHERE id = ?", (account_id,)).fetchone()
+        logins = {r[0]: r[1] for r in conn.execute("SELECT provider, label FROM identities WHERE account_id = ?",
+                                                   (account_id,))}
+    return {"name": name[0] if name else "", "logins": logins}
+
+
 def remember_name(account_id: int, name: str) -> None:
     """Fill in an account's name from Telegram if it has none (the owner's account starts without one)."""
     if name:

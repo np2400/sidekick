@@ -124,7 +124,7 @@ export default function Landing() {
               things done: reminders, tasks and events, always with your OK before it changes anything that isn't its own.
             </p>
             <div className="hero-actions">
-              <ButtonLink to="/signin" size="lg">Sign in</ButtonLink>
+              <ButtonLink to="/app/signin" size="lg">Sign in</ButtonLink>
               <ButtonLink to="/app/chat" variant="secondary" size="lg">Open the preview</ButtonLink>
             </div>
             <p className="muted small">Available today on Telegram (invite-only). The web app is in preview.</p>

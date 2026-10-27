@@ -14,12 +14,12 @@ export function Logo({ size = 28, withName = true }: { size?: number; withName?:
   );
 }
 
-/** Shown on app pages until the web app is linked to the real backend, so nobody mistakes it for live. */
+/** Shown on app pages while the web app is a read-only preview, so nobody expects to send messages yet. */
 export function PreviewPill() {
   return (
-    <span className="preview-pill" title="This web app isn't connected to the Sidekick backend yet">
+    <span className="preview-pill" title="Your real data, read-only: chat from the web comes in the next step">
       <span className="dot" aria-hidden="true" />
-      <span>Preview<span className="pill-extra"> · not connected</span></span>
+      <span>Preview<span className="pill-extra"> · read-only</span></span>
     </span>
   );
 }

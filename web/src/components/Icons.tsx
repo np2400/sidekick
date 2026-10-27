@@ -112,6 +112,7 @@ const PATHS: Record<string, ReactNode> = {
   ),
   check: <path d="M20 6 9 17l-5-5" />,
   edit: <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />,
+  logout: <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />,
 };
 
 export type IconName = keyof typeof PATHS;

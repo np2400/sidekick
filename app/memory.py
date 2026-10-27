@@ -44,6 +44,45 @@ def history(account_id: int, conversation_id: int | None = None) -> tuple[list[M
     return past, any(r["sensitive"] for r in rows)
 
 
+def conversations(account_id: int, limit: int = 100) -> list[dict]:
+    """Saved history for the web's sidebar, newest first: titles decrypted, no message text."""
+    with db.connect() as conn:
+        rows = conn.execute("SELECT c.id, c.origin, c.title_encrypted, c.created_at, c.last_message_at, "
+                            "(SELECT COUNT(*) FROM chat_messages m WHERE m.conversation_id = c.id) AS messages "
+                            "FROM conversations c WHERE c.account_id = ? "
+                            "ORDER BY c.last_message_at DESC, c.id DESC LIMIT ?", (account_id, limit)).fetchall()
+    return [{"id": r["id"], "title": _open(r["title_encrypted"]) or "Conversation", "origin": r["origin"],
+             "started": _iso(r["created_at"]), "updated": _iso(r["last_message_at"]), "messages": r["messages"]}
+            for r in rows]
+
+
+def transcript(account_id: int, conversation_id: int) -> dict | None:
+    """One conversation in full, or None if it isn't this account's (the web answers "not found")."""
+    with db.connect() as conn:
+        head = conn.execute("SELECT id, origin, title_encrypted FROM conversations WHERE id = ? AND account_id = ?",
+                            (conversation_id, account_id)).fetchone()
+        rows = [] if head is None else conn.execute(
+            "SELECT role, text_encrypted, channel, created_at FROM chat_messages WHERE conversation_id = ? "
+            "AND account_id = ? ORDER BY id", (conversation_id, account_id)).fetchall()
+    if head is None:
+        return None
+    return {"id": head["id"], "title": _open(head["title_encrypted"]) or "Conversation", "origin": head["origin"],
+            "messages": [{"role": r["role"], "text": _open(r["text_encrypted"]) or "[can't be decrypted]",
+                          "channel": r["channel"], "at": _iso(r["created_at"])} for r in rows]}
+
+
+def _open(box: str) -> str:
+    try:
+        return vault.unlock_text(box) if box else ""
+    except vault.VaultError:
+        return ""
+
+
+def _iso(stamp: str) -> str:
+    """SQLite's UTC 'YYYY-MM-DD HH:MM:SS' as ISO 8601, so a browser shows it in its own timezone."""
+    return stamp.replace(" ", "T") + "Z"
+
+
 def remember(account_id: int, user_text: str, reply: str, sensitive: bool = False) -> int | None:
     """Save one exchange into the current Telegram conversation (or a new one). Returns the conversation id."""
     try:

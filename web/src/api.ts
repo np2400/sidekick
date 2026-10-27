@@ -1,61 +1,76 @@
 /**
- * The one place the web app gets data from.
+ * The one place the web app gets data from: Sidekick's API (app/web_api.py), same domain, signed in with the
+ * session cookie (HttpOnly: this code never sees it). Read-only for now (W3b).
  *
- * Today Sidekick Web is a UI preview: nothing here talks to the Sidekick backend, and nothing is invented.
- * Every function answers "unavailable" with a reason and, where it's true, how to do the same thing today
- * on Telegram. When the real backend API exists, these functions call it and the pages don't change.
+ * Nothing is invented: every call answers with real data, "signed out", or an honest "unavailable" with the
+ * reason and, where it's true, how to do the same thing today in Telegram.
  */
 
 export type Unavailable = { state: "unavailable"; reason: string; today?: string };
+export type SignedOut = { state: "signed_out" };
 export type Ready<T> = { state: "ready"; data: T };
-export type Result<T> = Ready<T> | Unavailable;
+export type Result<T> = Ready<T> | Unavailable | SignedOut;
 
-export type Session = { name: string; email: string; picture?: string };
-export type Conversation = { id: string; title: string; updatedAt: string };
+export type Session = { name: string; role: "owner" | "member"; telegram: boolean; google: string | null };
+export type Conversation = {
+  id: number; title: string; origin: "telegram" | "web"; started: string; updated: string; messages: number;
+};
+export type Message = { role: "user" | "assistant"; text: string; channel: "telegram" | "web"; at: string };
+export type Transcript = { id: number; title: string; origin: "telegram" | "web"; messages: Message[] };
 export type Reminder = { id: number; text: string; next: string; repeat: string };
 export type Task = { id: number; title: string; due: string | null };
+export type Tasks = { tasks: Task[]; elsewhere?: string };
 export type Brief = { date: string; text: string };
-export type Connection = { app: "calendar" | "gmail"; connected: boolean; account?: string };
-export type Preferences = { timezone: string; briefTime: string | null };
+export type GoogleLink = { managed: "server" | "you"; calendar: boolean; gmail: boolean; email: string | null };
+export type Connections = { google: GoogleLink; telegram: boolean; sign_in: string | null };
+export type Preferences = { timezone: string; brief_time: string | null };
 
-/** False until the web app is linked to the real backend: pages use it to label themselves as a preview. */
-export const BACKEND_CONNECTED = false;
-
-const NOT_LINKED = "Sidekick Web isn't connected to your Sidekick account yet.";
+/** True now that the web app reads the real backend: pages stop calling themselves "not connected". */
+export const BACKEND_CONNECTED = true;
 
 function unavailable(reason: string, today?: string): Unavailable {
   return { state: "unavailable", reason, today };
 }
 
-export async function getSession(): Promise<Result<Session>> {
-  return unavailable("Google sign-in isn't connected yet.");
+async function get<T>(path: string): Promise<Result<T>> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/${path}`, { credentials: "same-origin", headers: { Accept: "application/json" } });
+  } catch {
+    return unavailable("Can't reach Sidekick right now. Check your connection and try again.");
+  }
+  if (response.status === 401) return { state: "signed_out" };
+  if (response.status === 404) return unavailable("Not found. It may have been deleted.");
+  if (!response.ok) return unavailable(`Sidekick couldn't load this (error ${response.status}). Try again soon.`);
+  try {
+    return { state: "ready", data: (await response.json()) as T };
+  } catch {
+    return unavailable("Sidekick sent something unexpected. Try again soon.");
+  }
 }
 
-export async function listConversations(): Promise<Result<Conversation[]>> {
-  return unavailable(NOT_LINKED, "Your conversations happen on Telegram for now.");
-}
+export const getSession = () => get<Session>("me");
+export const listConversations = () => get<Conversation[]>("conversations");
+export const getConversation = (id: string) => get<Transcript>(`conversations/${encodeURIComponent(id)}`);
+export const listReminders = () => get<Reminder[]>("reminders");
+export const listTasks = () => get<Tasks>("tasks");
+export const getConnections = () => get<Connections>("connections");
+export const getPreferences = () => get<Preferences>("settings");
 
 export async function sendMessage(_text: string, _files: File[]): Promise<Result<never>> {
-  return unavailable("Chat isn't connected to the assistant yet, so nothing was sent.",
-    "Message Sidekick on Telegram to use it today.");
+  return unavailable("Sending messages from the web comes in the next step, so nothing was sent.",
+    "Message Sidekick in Telegram: your conversations show up here too.");
 }
 
 export async function getBrief(): Promise<Result<Brief>> {
-  return unavailable(NOT_LINKED, "/brief");
+  return unavailable("Your morning brief comes to the web in a later step.", "/brief");
 }
 
-export async function listReminders(): Promise<Result<Reminder[]>> {
-  return unavailable(NOT_LINKED, "/reminders");
-}
-
-export async function listTasks(): Promise<Result<Task[]>> {
-  return unavailable(NOT_LINKED, "\"what are my tasks?\"");
-}
-
-export async function getConnections(): Promise<Result<Connection[]>> {
-  return unavailable("Connecting Google from the web isn't available yet.", "/connect  ·  /connect gmail");
-}
-
-export async function getPreferences(): Promise<Result<Preferences>> {
-  return unavailable(NOT_LINKED, "/timezone  ·  /brieftime");
+/** Sign out this browser. The server checks the request comes from Sidekick's own page (Origin). */
+export async function signOut(): Promise<void> {
+  try {
+    await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
+  } catch {
+    // Offline: the cookie stays until it expires; the page still goes to sign-in.
+  }
 }

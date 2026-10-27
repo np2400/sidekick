@@ -3,14 +3,16 @@ import subprocess
 
 import pytest
 
-from deploy.deploy import deploy
+from deploy.deploy import WEB_BUILD, deploy
 
 OLD, NEW = "a" * 40, "b" * 40
 
 
 class FakeShell:
-    def __init__(self, current=OLD, target=NEW, newer=False, build_fails=False):
+    def __init__(self, current=OLD, target=NEW, newer=False, build_fails=False, web_changed=False,
+                 web_build_fails=False):
         self.current, self.target, self.newer, self.build_fails = current, target, newer, build_fails
+        self.web_changed, self.web_build_fails = web_changed, web_build_fails
         self.commands = []
 
     def run(self, *cmd):
@@ -23,10 +25,14 @@ class FakeShell:
             return "Read PDF attachments"
         if cmd[:3] == ("docker", "compose", "up") and self.build_fails:
             raise subprocess.CalledProcessError(1, cmd)
+        if cmd == WEB_BUILD and self.web_build_fails and len(self.ran(*WEB_BUILD)) == 1:  # the new version's
+            raise subprocess.CalledProcessError(1, cmd)
         return ""
 
     def succeeds(self, *cmd):
         self.commands.append(cmd)
+        if cmd[:3] == ("git", "diff", "--quiet"):  # "nothing changed in web/" succeeds
+            return not self.web_changed
         return self.newer if cmd[:3] == ("git", "merge-base", "--is-ancestor") else True
 
     def ran(self, *prefix):
@@ -39,6 +45,15 @@ class FakeShell:
 @pytest.fixture
 def failed_file(tmp_path):
     return tmp_path / ".deploy-failed"
+
+
+@pytest.fixture
+def built(tmp_path):
+    """The web app was built before (web/dist/index.html exists)."""
+    index = tmp_path / "dist" / "index.html"
+    index.parent.mkdir()
+    index.write_text("<!doctype html>")
+    return index
 
 
 def test_nothing_to_do_when_production_has_not_moved(failed_file):
@@ -83,3 +98,31 @@ def test_the_next_good_commit_clears_the_failure_mark(failed_file):
     sh = FakeShell(target="c" * 40)
     assert deploy(sh, healthy=lambda: True, failed_file=failed_file).startswith("deployed")
     assert not failed_file.exists()
+
+
+# --- Sidekick Web: web/ is built into web/dist (served by Caddy at /app) -----------------------------------------
+
+def test_the_web_app_is_built_before_the_restart_when_web_changed(failed_file, built):
+    sh = FakeShell(web_changed=True)
+    assert deploy(sh, healthy=lambda: True, failed_file=failed_file, web_built=built) == f"deployed {NEW[:7]}"
+    order = [c for c in sh.commands if c == WEB_BUILD or c[:3] == ("docker", "compose", "up")]
+    assert order == [WEB_BUILD, ("docker", "compose", "up", "-d", "--build")]  # Caddy restarts on the new files
+
+
+def test_no_web_build_when_web_didnt_change(failed_file, built):
+    sh = FakeShell(web_changed=False)
+    deploy(sh, healthy=lambda: True, failed_file=failed_file, web_built=built)
+    assert not sh.ran(*WEB_BUILD)
+
+
+def test_the_first_deploy_builds_the_web_app_even_if_web_didnt_change(failed_file, tmp_path):
+    sh = FakeShell(web_changed=False)
+    deploy(sh, healthy=lambda: True, failed_file=failed_file, web_built=tmp_path / "dist" / "index.html")
+    assert sh.ran(*WEB_BUILD)
+
+
+def test_a_web_build_that_fails_rolls_back_and_rebuilds_the_working_version(failed_file, built):
+    sh = FakeShell(web_changed=True, web_build_fails=True)
+    assert deploy(sh, healthy=lambda: True, failed_file=failed_file, web_built=built) == f"rolled back {NEW[:7]}"
+    assert sh.ran("git", "reset", "-q", "--hard", OLD) and len(sh.ran(*WEB_BUILD)) == 2  # new failed, old rebuilt
+    assert failed_file.read_text() == NEW and "failed" in sh.notified()[-1]

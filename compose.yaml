@@ -36,6 +36,7 @@ services:
       - ./caddy:/etc/caddy:ro      # the folder, not the file: git pull replaces files, and a single-file
                                    # mount would keep showing Caddy the old copy
       - ./site:/srv:ro             # home page + privacy policy
+      - ./web:/srv/web:ro          # Sidekick Web: Caddy serves web/dist (the folder, so a rebuild shows up)
       - caddy_data:/data           # certificates: keep them, or Let's Encrypt rate-limits re-issuing
     restart: unless-stopped
 

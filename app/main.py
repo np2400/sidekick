@@ -9,10 +9,10 @@ from html import escape
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from app import account, daily, db, google_web, memory, reminders, settings, users, web_login
+from app import account, daily, db, google_web, memory, reminders, settings, users, web_api, web_login
 from app.vault import VaultError
 from app.agent import PENDING, decide, handle_approval, run_agent
 from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
@@ -48,6 +48,7 @@ async def lifespan(_app):
 
 app = FastAPI(title="Sidekick", lifespan=lifespan)
 app.add_middleware(RequestIdMiddleware)
+app.include_router(web_api.router)  # Sidekick Web's API: /api/...
 
 
 class EchoRequest(BaseModel):
@@ -106,12 +107,9 @@ def same_origin(request: Request) -> bool:
     return request.headers.get("origin") == web_login.origin()
 
 
-def signed_in_page(session: str, account_id: int, title: str = "Signed in ✅") -> HTMLResponse:
-    with db.connect() as conn:
-        name = (conn.execute("SELECT name FROM accounts WHERE id = ?", (account_id,)).fetchone() or [""])[0]
-    response = page(title, f"You're signed in to Sidekick Web as {name or 'you'}. The web app itself comes in the "
-                           "next step; for now Sidekick works in Telegram as usual.",
-                    extra="<form method=post action=/auth/logout><button>Sign out</button></form>")
+def into_the_app(session: str) -> RedirectResponse:
+    """Signed in: set the session cookie and open the web app (/app, served by Caddy from web/)."""
+    response = RedirectResponse("/app/", status_code=303)
     response.set_cookie(web_login.COOKIE, session, max_age=web_login.SESSION_DAYS * 86400, path="/", secure=True,
                         httponly=True, samesite="lax")  # HttpOnly: page scripts can't read it
     return response
@@ -137,7 +135,7 @@ def web_sign_in() -> Response:
 
 
 @app.get("/auth/google/callback", response_class=HTMLResponse)
-def web_sign_in_callback(state: str = "", code: str = "", error: str = "") -> HTMLResponse:
+def web_sign_in_callback(state: str = "", code: str = "", error: str = "") -> Response:
     if error or not (state and code):
         return page("Not signed in", "Google sign-in was cancelled.", 400)
     try:
@@ -153,11 +151,11 @@ def web_sign_in_callback(state: str = "", code: str = "", error: str = "") -> HT
                                           "You'll then sign in to Sidekick Web with it.",
                     extra=f"<form method=post action=/auth/link/confirm><input type=hidden name=pending "
                           f"value='{escape(outcome['pending'])}'><button>Link</button> <a href=/>Cancel</a></form>")
-    return signed_in_page(outcome["session"], outcome["account_id"])
+    return into_the_app(outcome["session"])
 
 
 @app.post("/auth/link/confirm", response_class=HTMLResponse)
-async def web_link_confirm(request: Request) -> HTMLResponse:
+async def web_link_confirm(request: Request) -> Response:
     if not same_origin(request):
         return page("Not linked", "That request didn't come from Sidekick's own page.", 403)
     pending = urllib.parse.parse_qs((await request.body()).decode()).get("pending", [""])[0]
@@ -167,7 +165,7 @@ async def web_link_confirm(request: Request) -> HTMLResponse:
         return page("Not linked", str(exc), 400)
     send_to_account(account_id, f"🔗 Sidekick Web is now linked to your Google account ({email}) and signed in. "
                                 "Not you? Send /signout_web to sign out everywhere.")
-    return signed_in_page(session, account_id, "Linked ✅")
+    return into_the_app(session)
 
 
 @app.post("/auth/logout", response_class=HTMLResponse)
@@ -178,22 +176,6 @@ def web_sign_out(request: Request) -> HTMLResponse:
     response = page("Signed out", "You're signed out of Sidekick Web on this browser.")
     response.delete_cookie(web_login.COOKIE, path="/", secure=True, httponly=True, samesite="lax")
     return response
-
-
-@app.get("/api/me")
-def api_me(request: Request) -> JSONResponse:
-    """Who this browser is signed in as. Everything under /api starts like this: the account comes from the
-    session cookie, never from the request."""
-    account_id = web_login.account_of(request.cookies.get(web_login.COOKIE))
-    if account_id is None:
-        return JSONResponse({"error": "not signed in"}, status_code=401)
-    with db.connect() as conn:
-        name = (conn.execute("SELECT name FROM accounts WHERE id = ?", (account_id,)).fetchone() or [""])[0]
-        logins = {r["provider"]: r["label"] for r in conn.execute(
-            "SELECT provider, label FROM identities WHERE account_id = ?", (account_id,))}
-    owner = TELEGRAM_OWNER_ID.isdigit() and users.ensure_owner(int(TELEGRAM_OWNER_ID)) == account_id
-    return JSONResponse({"name": name, "role": "owner" if owner else "member", "telegram": "telegram" in logins,
-                         "google": logins.get("google")})
 
 
 @app.post("/telegram/webhook")

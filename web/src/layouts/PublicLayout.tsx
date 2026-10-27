@@ -19,7 +19,7 @@ export default function PublicLayout() {
             <a href={TECH_URL} target="_blank" rel="noreferrer">Technical overview</a>
           </nav>
           <div className="nav-actions">
-            <ButtonLink to="/signin" variant="ghost">Sign in</ButtonLink>
+            <ButtonLink to="/app/signin" variant="ghost">Sign in</ButtonLink>
             <ButtonLink to="/app/chat">Open preview</ButtonLink>
           </div>
         </div>

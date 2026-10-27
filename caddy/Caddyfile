@@ -22,6 +22,14 @@
 	handle /api/* {
 		reverse_proxy sidekick:8000
 	}
+	# The web app itself, built from web/ by deploy/deploy.py. A path inside it that isn't a file (e.g.
+	# /app/chat/12) loads the app, which shows the right page.
+	redir /app /app/
+	handle_path /app/* {
+		root * /srv/web/dist
+		try_files {path} /index.html
+		file_server
+	}
 	# Two static pages (site/), required by Google's sign-in screen: a home page and a privacy policy.
 	handle / {
 		root * /srv

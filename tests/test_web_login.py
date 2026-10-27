@@ -12,7 +12,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app import db, google_web, main, users, web_login
+from app import db, google_web, main, users, web_api, web_login
 from app.trace import AgentResult, Trace
 
 OWNER, DAD = 111, 222
@@ -47,6 +47,7 @@ def web(monkeypatch):
         monkeypatch.setattr(web_login, name, value)
     monkeypatch.setattr(main, "TELEGRAM_WEBHOOK_SECRET", "s")
     monkeypatch.setattr(main, "TELEGRAM_OWNER_ID", str(OWNER))
+    monkeypatch.setattr(web_api, "TELEGRAM_OWNER_ID", str(OWNER))
     monkeypatch.setattr(google_web, "disconnect", lambda account_id: True)
     google = FakeGoogle()
     monkeypatch.setattr(web_login.httpx, "post", google.post)
@@ -118,7 +119,7 @@ def test_linking_your_telegram_account_then_signing_in_with_google(web):
     page = link_with_web(web)
     assert "Add Google neel@gmail.com to Neel's Sidekick account?" in shown(page)  # the name came from Telegram
     linked = web["confirm"](page)
-    assert linked.status_code == 200 and "Linked ✅" in shown(linked) and "signed in to Sidekick Web as Neel" in shown(linked)
+    assert linked.status_code == 303 and linked.headers["location"] == "/app/"  # straight into the web app
 
     cookie = linked.headers["set-cookie"]
     assert cookie.startswith(f"{web_login.COOKIE}=") and all(flag in cookie.lower() for flag in (
@@ -130,7 +131,7 @@ def test_linking_your_telegram_account_then_signing_in_with_google(web):
 
     web["browser"].cookies.clear()  # another day, another browser: a plain sign-in now works
     signed_in = web["come_back"](web["go_to_google"]("/auth/google/start"))
-    assert "Signed in ✅" in shown(signed_in) and web["browser"].get("/api/me").json()["name"] == "Neel"
+    assert signed_in.headers["location"] == "/app/" and web["browser"].get("/api/me").json()["name"] == "Neel"
 
 
 def test_a_session_is_stored_only_as_a_fingerprint(web):

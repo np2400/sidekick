@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
-import { getPreferences, getSession } from "../api";
-import { ButtonLink, PageHeader, PreviewPill, TelegramHint } from "../components/Common";
+import { useNavigate } from "react-router-dom";
+import { getPreferences, getSession, signOut } from "../api";
+import { PageHeader, PreviewPill, TelegramHint } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
 import ThemeSwitch from "../components/ThemeSwitch";
 import { PRIVACY_URL } from "../layouts/PublicLayout";
@@ -35,18 +36,28 @@ const Unavailable = ({ label }: { label: string }) => (
 );
 
 export default function Settings() {
+  const navigate = useNavigate();
   const session = useResult(getSession);
   const prefs = useResult(getPreferences);
-  const signedIn = session?.state === "ready";
+  const me = session?.state === "ready" ? session.data : null;
+  const values = prefs?.state === "ready" ? prefs.data : null;
+
+  async function leave() {
+    await signOut();
+    navigate("/app/signin", { replace: true });
+  }
 
   return (
     <div className="page narrow">
       <PageHeader title="Settings" subtitle="Your account, preferences and data." />
 
       <Section title="Account">
-        <Row icon="user" title={signedIn ? session.data.name : "Not signed in"}
-          body={signedIn ? session.data.email : "Sign in with Google to see your account here."}
-          control={!signedIn && <ButtonLink to="/signin" variant="secondary">Sign in</ButtonLink>} />
+        <Row icon="user" title={me ? me.name || "You" : "…"}
+          body={me ? <>Signed in with Google{me.google ? ` (${me.google})` : ""}
+            {me.telegram ? " · linked to your Telegram" : ""}{me.role === "owner" ? " · owner" : ""}</> : ""}
+          control={me && <button className="btn btn-secondary btn-sm" onClick={leave}>Sign out</button>} />
+        <Row icon="logout" title="Sign out everywhere"
+          body={<>Signs out every browser at once. <TelegramHint>/signout_web</TelegramHint></>} />
       </Section>
 
       <Section title="Appearance">
@@ -55,11 +66,11 @@ export default function Settings() {
       </Section>
 
       <Section title="Preferences">
-        <Row icon="globe" title="Timezone" body={<>So "remind me at 9" means 9 where you are.{" "}
-          {prefs?.state === "unavailable" && <TelegramHint>/timezone</TelegramHint>}</>}
+        <Row icon="globe" title={`Timezone${values ? `: ${values.timezone}` : ""}`}
+          body={<>So "remind me at 9" means 9 where you are. <TelegramHint>/timezone</TelegramHint></>}
           control={<Unavailable label="Change" />} />
-        <Row icon="sunrise" title="Morning brief" body={<>A summary of your day, at a time you choose.{" "}
-          {prefs?.state === "unavailable" && <TelegramHint>/brieftime 7:30</TelegramHint>}</>}
+        <Row icon="sunrise" title={`Morning brief${values ? `: ${values.brief_time ?? "off"}` : ""}`}
+          body={<>A summary of your day, at a time you choose. <TelegramHint>/brieftime 7:30</TelegramHint></>}
           control={<Unavailable label="Set time" />} />
       </Section>
 
@@ -67,9 +78,10 @@ export default function Settings() {
         <Row icon="download" title="Export your data"
           body={<>A file with everything Sidekick stores about you. <TelegramHint>/export</TelegramHint></>}
           control={<Unavailable label="Export" />} />
-        <Row icon="eraser" title="Clear recent conversation"
-          body={<>Sidekick forgets your recent messages. <TelegramHint>/forget</TelegramHint></>}
-          control={<Unavailable label="Clear" />} />
+        <Row icon="eraser" title="Delete conversations"
+          body={<>Saved for 30 days. Delete the current one, or all of them.{" "}
+            <TelegramHint>/forget  ·  /forget_all</TelegramHint></>}
+          control={<Unavailable label="Delete" />} />
         <Row icon="trash" title="Delete account and data" danger
           body={<>Erases everything and revokes Google access. <TelegramHint>/delete_me</TelegramHint></>}
           control={<Unavailable label="Delete" />} />
@@ -79,7 +91,7 @@ export default function Settings() {
       </Section>
 
       <Section title="About">
-        <Row icon="info" title="Sidekick Web" body="Version 0.1, a preview of the web app. Telegram works on its own."
+        <Row icon="info" title="Sidekick Web" body="Version 0.2: your real data, read-only. Telegram works on its own."
           control={<PreviewPill />} />
       </Section>
     </div>
