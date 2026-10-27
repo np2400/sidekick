@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from fastapi.testclient import TestClient
 
-from app import account, db, google_web, main, memory, native_tasks, reminders, settings, users
+from app import account, db, google_web, main, memory, native_tasks, reminders, settings, users, web_login
 from app.agent import PENDING
 from app.config import OWNER_TIMEZONE
 from app.db.store import log_action, save_trace
@@ -34,7 +34,11 @@ def fill(chat_id: int, name: str) -> None:
     save_trace(chat_id, f"trace-{chat_id}", "reply", '{"models": [], "steps": []}')
     settings.set_timezone(chat_id, "Asia/Kolkata")
     settings.count_request(chat_id, "Asia/Kolkata")
+    web_login.new_session(chat_id)
+    web_login.link_code(chat_id)
     with db.connect() as conn:
+        conn.execute("INSERT INTO pending_links (token_hash, account_id, google_sub, expires_at) "
+                     "VALUES (?, ?, ?, datetime('now', '+10 minutes'))", (f"pending-{chat_id}", chat_id, f"g-{name}"))
         conn.execute("INSERT INTO messages (chat_id, role, text) VALUES (?, 'user', ?)",  # saved before W2
                      (chat_id, f"{name}'s old message"))
         conn.execute("INSERT INTO daily_runs (job, run_date, chat_id) VALUES ('brief', '2026-10-25', ?)", (chat_id,))

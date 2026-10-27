@@ -25,7 +25,8 @@ from app import db, memory, users, vault
 from app.account import PERSONAL
 from app.config import DB_PATH
 
-NEW_TABLES = {"accounts", "identities", "conversations", "chat_messages"}  # 009, 010: the rest must not change
+NEW_TABLES = {"accounts", "identities", "conversations", "chat_messages",  # 009, 010
+              "sessions", "link_codes", "login_states", "pending_links"}  # 011: the rest must not change
 
 
 def open_db(path: Path):

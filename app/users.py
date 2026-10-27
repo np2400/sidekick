@@ -80,6 +80,13 @@ def active_members(owner_account: int | None) -> list[int]:
                                            (owner_account,))]
 
 
+def remember_name(account_id: int, name: str) -> None:
+    """Fill in an account's name from Telegram if it has none (the owner's account starts without one)."""
+    if name:
+        with db.connect() as conn:
+            conn.execute("UPDATE accounts SET name = ? WHERE id = ? AND name = ''", (name[:64], account_id))
+
+
 def is_member(telegram_id: int) -> bool:
     return account_for("telegram", str(telegram_id)) is not None
 

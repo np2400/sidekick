@@ -12,6 +12,16 @@
 	handle /oauth/google/callback {
 		reverse_proxy sidekick:8000
 	}
+	# Sidekick Web (W3): the one-time link from /web in Telegram, signing in with Google, and the API.
+	handle /link {
+		reverse_proxy sidekick:8000
+	}
+	handle /auth/* {
+		reverse_proxy sidekick:8000
+	}
+	handle /api/* {
+		reverse_proxy sidekick:8000
+	}
 	# Two static pages (site/), required by Google's sign-in screen: a home page and a privacy policy.
 	handle / {
 		root * /srv

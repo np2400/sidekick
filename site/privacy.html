@@ -12,7 +12,7 @@
 </head>
 <body>
 <h1>Sidekick privacy policy</h1>
-<p><em>Last updated: October 26, 2026</em> (saved conversations: kept 30 days, encrypted, and deletable)</p>
+<p><em>Last updated: October 26, 2026</em> (saved conversations kept 30 days, encrypted and deletable; signing in to Sidekick Web)</p>
 
 <p>Sidekick is a personal AI assistant on Telegram, built and run by Neel Parekh. It is used by its owner
 and a few people the owner invites with a one-time link; there is no public sign-up.</p>
@@ -49,6 +49,10 @@ and a few people the owner invites with a one-time link; there is no public sign
     service, for its forecast; for places in the US, its location also goes to the US National Weather Service for
     official alerts. If severe weather is expected there, a news search about it (the place and the kind of
     weather) goes to Tavily.</li>
+  <li><strong>Signing in to Sidekick Web</strong> (preview, for people who already use Sidekick): Sidekick asks
+    Google only who you are, meaning your Google account's id and email address, never access to your email or
+    calendar. It keeps that id and address to recognize you, and sets one essential cookie in your browser that
+    keeps you signed in for 30 days after you last use it. It sets no tracking or advertising cookies.</li>
   <li><strong>Photos</strong> you send the bot: passed to an AI model that can read images (currently Google
     Gemini, with Qwen on Groq as a backup) to answer you. Sidekick does not store photos.</li>
 </ul>
@@ -88,6 +92,7 @@ Policy</a>, including the Limited Use requirements.</p>
     overwritten within 7 days.</li>
   <li><code>/forget</code> deletes the current conversation, <code>/forget_all</code> deletes every saved
     conversation, and <code>/new</code> starts a fresh one; <code>/disconnect</code> removes Google access.</li>
+  <li>Sign out of Sidekick Web on any page, or send <code>/signout_web</code> to sign out everywhere at once.</li>
   <li>Disconnect Google at any time at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
   <li>The owner can end an invited user's access; their data then stays until they or the owner delete it.</li>
   <li>Questions or requests: use the contact below.</li>

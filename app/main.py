@@ -2,16 +2,17 @@
 import json
 import logging
 import secrets
+import urllib.parse
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from html import escape
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Header, HTTPException, Response
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from app import account, daily, db, google_web, memory, reminders, settings, users
+from app import account, daily, db, google_web, memory, reminders, settings, users, web_login
 from app.vault import VaultError
 from app.agent import PENDING, decide, handle_approval, run_agent
 from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
@@ -89,11 +90,110 @@ def google_callback(state: str = "", code: str = "", error: str = "") -> HTMLRes
                                "Telegram.")
 
 
-def page(title: str, text: str, status: int = 200) -> HTMLResponse:
+def page(title: str, text: str, status: int = 200, extra: str = "") -> HTMLResponse:
+    """A minimal page. `extra` is trusted HTML built here (forms), never user text."""
     return HTMLResponse(f"<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,"
                         f"initial-scale=1'><title>Sidekick</title><body style='font:18px/1.5 system-ui;max-width:"
-                        f"32rem;margin:3rem auto;padding:0 1rem'><h1>{escape(title)}</h1><p>{escape(text)}</p>",
+                        f"32rem;margin:3rem auto;padding:0 1rem'><h1>{escape(title)}</h1><p>{escape(text)}</p>{extra}",
                         status_code=status)
+
+
+# --- Sidekick Web: signing in (W3, app/web_login.py) ----------------------------------------------------------
+
+def same_origin(request: Request) -> bool:
+    """Forms that change something must come from Sidekick's own pages: a form on another website could make a
+    signed-in browser submit them (CSRF). Browsers always send Origin with a form POST."""
+    return request.headers.get("origin") == web_login.origin()
+
+
+def signed_in_page(session: str, account_id: int, title: str = "Signed in ✅") -> HTMLResponse:
+    with db.connect() as conn:
+        name = (conn.execute("SELECT name FROM accounts WHERE id = ?", (account_id,)).fetchone() or [""])[0]
+    response = page(title, f"You're signed in to Sidekick Web as {name or 'you'}. The web app itself comes in the "
+                           "next step; for now Sidekick works in Telegram as usual.",
+                    extra="<form method=post action=/auth/logout><button>Sign out</button></form>")
+    response.set_cookie(web_login.COOKIE, session, max_age=web_login.SESSION_DAYS * 86400, path="/", secure=True,
+                        httponly=True, samesite="lax")  # HttpOnly: page scripts can't read it
+    return response
+
+
+@app.get("/link", response_class=HTMLResponse)
+def web_link(code: str = "") -> Response:
+    """The one-time link from /web in Telegram: on to Google's sign-in."""
+    if not web_login.configured():
+        return page("Not available", "Sidekick Web isn't set up on this server yet.", 503)
+    try:
+        return RedirectResponse(web_login.start(code), status_code=303)
+    except web_login.LoginError as exc:
+        return page("Link expired", str(exc), 400)
+
+
+@app.get("/auth/google/start")
+def web_sign_in() -> Response:
+    """A plain sign-in (the web app's button): works only for Google accounts linked before."""
+    if not web_login.configured():
+        return page("Not available", "Sidekick Web isn't set up on this server yet.", 503)
+    return RedirectResponse(web_login.start(), status_code=303)
+
+
+@app.get("/auth/google/callback", response_class=HTMLResponse)
+def web_sign_in_callback(state: str = "", code: str = "", error: str = "") -> HTMLResponse:
+    if error or not (state and code):
+        return page("Not signed in", "Google sign-in was cancelled.", 400)
+    try:
+        outcome = web_login.finish(state, code)
+    except web_login.LoginError as exc:
+        return page("Not signed in", str(exc), 400)
+    if outcome["result"] == "unknown":
+        return page("Sidekick is invite-only", "This Google account isn't linked to Sidekick. If you use Sidekick "
+                                               "in Telegram, send /web there and open the link it gives you.", 403)
+    if outcome["result"] == "confirm":
+        whose = f"{outcome['name']}'s" if outcome["name"] else "your"
+        return page("Link your account?", f"Add Google {outcome['email']} to {whose} Sidekick account? "
+                                          "You'll then sign in to Sidekick Web with it.",
+                    extra=f"<form method=post action=/auth/link/confirm><input type=hidden name=pending "
+                          f"value='{escape(outcome['pending'])}'><button>Link</button> <a href=/>Cancel</a></form>")
+    return signed_in_page(outcome["session"], outcome["account_id"])
+
+
+@app.post("/auth/link/confirm", response_class=HTMLResponse)
+async def web_link_confirm(request: Request) -> HTMLResponse:
+    if not same_origin(request):
+        return page("Not linked", "That request didn't come from Sidekick's own page.", 403)
+    pending = urllib.parse.parse_qs((await request.body()).decode()).get("pending", [""])[0]
+    try:
+        session, account_id, email = web_login.confirm_link(pending)
+    except web_login.LoginError as exc:
+        return page("Not linked", str(exc), 400)
+    send_to_account(account_id, f"🔗 Sidekick Web is now linked to your Google account ({email}) and signed in. "
+                                "Not you? Send /signout_web to sign out everywhere.")
+    return signed_in_page(session, account_id, "Linked ✅")
+
+
+@app.post("/auth/logout", response_class=HTMLResponse)
+def web_sign_out(request: Request) -> HTMLResponse:
+    if not same_origin(request):
+        return page("Not signed out", "That request didn't come from Sidekick's own page.", 403)
+    web_login.end_session(request.cookies.get(web_login.COOKIE))
+    response = page("Signed out", "You're signed out of Sidekick Web on this browser.")
+    response.delete_cookie(web_login.COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    return response
+
+
+@app.get("/api/me")
+def api_me(request: Request) -> JSONResponse:
+    """Who this browser is signed in as. Everything under /api starts like this: the account comes from the
+    session cookie, never from the request."""
+    account_id = web_login.account_of(request.cookies.get(web_login.COOKIE))
+    if account_id is None:
+        return JSONResponse({"error": "not signed in"}, status_code=401)
+    with db.connect() as conn:
+        name = (conn.execute("SELECT name FROM accounts WHERE id = ?", (account_id,)).fetchone() or [""])[0]
+        logins = {r["provider"]: r["label"] for r in conn.execute(
+            "SELECT provider, label FROM identities WHERE account_id = ?", (account_id,))}
+    owner = TELEGRAM_OWNER_ID.isdigit() and users.ensure_owner(int(TELEGRAM_OWNER_ID)) == account_id
+    return JSONResponse({"name": name, "role": "owner" if owner else "member", "telegram": "telegram" in logins,
+                         "google": logins.get("google")})
 
 
 @app.post("/telegram/webhook")
@@ -148,6 +248,7 @@ def telegram_webhook(
             log.warning("Ignoring stranger %s. If this is you, set TELEGRAM_OWNER_ID=%s in .env", sender_id, sender_id)
         return {"ok": True}
     role, account_id = found
+    users.remember_name(account_id, message.get("from", {}).get("first_name", ""))  # e.g. the owner's: never stored
     ctx = context(account_id, sender_id, role)
 
     # 5. Approve: if a write is pending, this message is the user's yes/no.
@@ -193,6 +294,11 @@ def telegram_webhook(
         reply, buttons = connect_reply(ctx, gmail=command == "/connect gmail")
     elif command == "/disconnect":
         reply = disconnect_text(ctx)
+    elif command == "/web":
+        reply, buttons = web_reply(ctx)
+    elif command == "/signout_web":
+        n = web_login.end_all_sessions(ctx.chat_id)
+        reply = f"Signed out of Sidekick Web everywhere ({n} browser{'s' if n != 1 else ''})."
     elif command == "/help":
         reply = HELP + (OWNER_HELP if role == "owner" else "")
     elif command == "/export":
@@ -221,7 +327,8 @@ HELP = ("Just write to me, or send a photo with a question in the caption. Comma
         "/connect, /connect gmail, /disconnect - your Google Calendar and Gmail (read-only)\n"
         "/new - start a fresh conversation  ·  /forget - delete this conversation  ·  /forget_all - delete all "
         "saved conversations\n"
-        "/export - all your data as a file  ·  /delete_me - erase it")
+        "/export - all your data as a file  ·  /delete_me - erase it\n"
+        "/web - open Sidekick Web (preview)  ·  /signout_web - sign out of it everywhere")
 OWNER_HELP = "\nOwner: /invite - invite link  ·  /users - members  ·  /remove NAME [delete] - end access"
 
 
@@ -369,6 +476,15 @@ def connect_reply(ctx: ToolContext, gmail: bool = False) -> tuple[str, list | No
              f"The button works once, for {google_web.STATE_MINUTES} minutes. If Google says this browser isn't "
              "allowed, open it in Safari or Chrome.")
     return guide, [(label, google_web.start(ctx.chat_id, gmail=gmail))]
+
+
+def web_reply(ctx: ToolContext) -> tuple[str, list | None]:
+    """/web: a one-time link that signs this account in to Sidekick Web with Google (and links them, once)."""
+    if not web_login.configured():
+        return "Sidekick Web isn't set up on this Sidekick yet.", None
+    return ("Sidekick Web (preview): open the button on the phone or computer you want to use, then sign in with "
+            "Google. It only asks Google who you are: no email or calendar access. The link works once, for "
+            f"{web_login.LINK_MINUTES} minutes."), [("Open Sidekick Web", web_login.link_code(ctx.chat_id))]
 
 
 def disconnect_text(ctx: ToolContext) -> str:
