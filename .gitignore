@@ -24,3 +24,7 @@ data/
 
 # Server-side deploy state: a commit that failed its health check (deploy/deploy.py)
 .deploy-failed
+
+# Sidekick Web (frontend)
+web/node_modules/
+web/dist/
