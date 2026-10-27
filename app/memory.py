@@ -51,7 +51,8 @@ def conversations(account_id: int, limit: int = 100) -> list[dict]:
                             "(SELECT COUNT(*) FROM chat_messages m WHERE m.conversation_id = c.id) AS messages "
                             "FROM conversations c WHERE c.account_id = ? "
                             "ORDER BY c.last_message_at DESC, c.id DESC LIMIT ?", (account_id, limit)).fetchall()
-    return [{"id": r["id"], "title": _open(r["title_encrypted"]) or "Conversation", "origin": r["origin"],
+    return [{"id": r["id"], "title": _readable(_open(r["title_encrypted"]), title=True) or "Conversation",
+             "origin": r["origin"],
              "started": _iso(r["created_at"]), "updated": _iso(r["last_message_at"]), "messages": r["messages"]}
             for r in rows]
 
@@ -66,9 +67,23 @@ def transcript(account_id: int, conversation_id: int) -> dict | None:
             "AND account_id = ? ORDER BY id", (conversation_id, account_id)).fetchall()
     if head is None:
         return None
-    return {"id": head["id"], "title": _open(head["title_encrypted"]) or "Conversation", "origin": head["origin"],
-            "messages": [{"role": r["role"], "text": _open(r["text_encrypted"]) or "[can't be decrypted]",
+    return {"id": head["id"], "title": _readable(_open(head["title_encrypted"]), title=True) or "Conversation",
+            "origin": head["origin"],
+            "messages": [{"role": r["role"], "text": _readable(_open(r["text_encrypted"])) or "[can't be decrypted]",
                           "channel": r["channel"], "at": _iso(r["created_at"])} for r in rows]}
+
+
+# Markers saved in place of things that aren't text, shown readably: (as a title, inside the conversation).
+MARKERS = {"[sent a photo]": ("Photo", "📷 Photo (photos aren't saved)"), "[morning brief]": ("Morning brief", "☀️ Morning brief")}
+
+
+def _readable(text: str, title: bool = False) -> str:
+    """"[sent a photo] what is this?" -> "Photo: what is this?" as a title, "📷 Photo (...) what is this?" inside."""
+    for marker, (as_title, inside) in MARKERS.items():
+        if text.startswith(marker):
+            rest = text[len(marker):].strip()
+            return (f"{as_title}: {rest}" if rest else as_title) if title else f"{inside} {rest}".strip()
+    return text
 
 
 def _open(box: str) -> str:

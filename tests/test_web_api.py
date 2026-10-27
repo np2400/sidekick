@@ -101,3 +101,17 @@ def test_a_removed_member_is_signed_out_of_the_api(people, monkeypatch):
     dad = people(DAD)
     account.remove_member(DAD)
     assert dad.get("/api/conversations").status_code == 401
+
+
+def test_markers_for_photos_and_the_brief_read_like_words(people):
+    """Regression (Oct 26): the sidebar showed "[morning brief]" and "[sent a photo]"."""
+    memory.new_conversation(OWNER)
+    memory.remember(OWNER, "[sent a photo] what is this?", "An AirPods case.", sensitive=True)
+    memory.new_conversation(OWNER)
+    memory.remember(OWNER, "[morning brief]", "Today: gym at 7.", sensitive=True)
+    me = people(OWNER)
+    titles = [c["title"] for c in me.get("/api/conversations").json()]
+    assert titles[:2] == ["Morning brief", "Photo: what is this?"]
+    photo = next(c for c in me.get("/api/conversations").json() if c["title"].startswith("Photo"))
+    first = me.get(f"/api/conversations/{photo['id']}").json()["messages"][0]["text"]
+    assert first == "📷 Photo (photos aren't saved) what is this?"
