@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { getPreferences, getSession, signOut } from "../api";
 import { PageHeader, PreviewPill, TelegramHint } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
+import Notifications from "../components/Notifications";
 import ThemeSwitch from "../components/ThemeSwitch";
 import { PRIVACY_URL } from "../layouts/PublicLayout";
 import { useResult } from "../useResult";
@@ -60,6 +61,10 @@ export default function Settings() {
           body={<>Signs out every browser at once. <TelegramHint>/signout_web</TelegramHint></>} />
       </Section>
 
+      <Section title="Notifications">
+        <Notifications />
+      </Section>
+
       <Section title="Appearance">
         <Row icon="sun" title="Theme" body="Follow your device, or always light or dark. Saved in this browser."
           control={<ThemeSwitch showLabels />} />
@@ -91,7 +96,7 @@ export default function Settings() {
       </Section>
 
       <Section title="About">
-        <Row icon="info" title="Sidekick Web" body="Version 0.3: chat with Sidekick here or in Telegram, in the same conversations. Notifications come next."
+        <Row icon="info" title="Sidekick Web" body="Version 0.4: chat with Sidekick here or in Telegram, in the same conversations, and get notifications."
           control={<PreviewPill />} />
       </Section>
     </div>

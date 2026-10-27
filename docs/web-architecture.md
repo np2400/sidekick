@@ -301,6 +301,21 @@ notification_sends (notification_id, target, status, attempts, next_try_at, last
 - New secret: VAPID keys. The private key goes in `.env` only, never in git or logs. Keep a copy: losing it
   silently breaks every device's subscription.
 
+**As built (W6a, migration 014):** the installable app (`web/public/manifest.webmanifest`, icons, `sw.js`) and
+devices that allowed notifications, with a test.
+- `app/push.py`: no `pywebpush` (it would bring both `aiohttp` and `requests`); its two parts instead: `http-ece`
+  encrypts each message to the device (RFC 8291, Mozilla's reference code) and `py-vapid` signs the request
+  (RFC 8292). `httpx` sends it. Tests decrypt what a fake phone received.
+- Only push services' addresses are accepted (Apple, Google, Mozilla, Microsoft; HTTPS, port 443), so a signed-in
+  person can't make the server POST anywhere else (SSRF). Addresses and keys are stored encrypted, never logged,
+  never returned to the page, never exported.
+- `GET /api/push` (the public key and your devices), `POST /api/push/subscriptions`, `DELETE
+  /api/push/subscriptions/{id}`, `POST /api/push/test`. A device signed in to another account moves to it.
+  404/410 from a push service marks a device `gone`; it's skipped until turned on again there.
+- Settings → Notifications explains what's needed where (iPhone: home screen first; blocked: where to allow).
+- VAPID keys: `docker compose exec -T sidekick python -m app.push keys >> .env` on the server, plus a copy.
+- W6b: reminders and the morning brief through the outbox below, the notification center, Done/Snooze/Tomorrow.
+
 **Limits to state honestly in the app:** delivery depends on the phone. Focus modes, battery savers, or removing
 permission can delay or block notifications, and iPhone needs the home-screen install. Notifications get tested on
 your real iPhone and an Android phone before anyone relies on them.

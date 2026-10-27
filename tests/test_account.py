@@ -47,6 +47,8 @@ def fill(chat_id: int, name: str) -> None:
         conn.execute("INSERT INTO daily_runs (job, run_date, chat_id) VALUES ('brief', '2026-10-25', ?)", (chat_id,))
         conn.execute("INSERT INTO google_accounts (chat_id, email, scopes, token_encrypted) VALUES (?, ?, '', 'LOCKED')",
                      (chat_id, f"{name.lower()}@gmail.com"))
+        conn.execute("INSERT INTO push_subscriptions (account_id, endpoint_hash, endpoint_encrypted, keys_encrypted, "
+                     "device_label) VALUES (?, ?, 'LOCKED', 'LOCKED', ?)", (chat_id, f"hash-{chat_id}", f"{name}'s phone"))
 
 
 @pytest.fixture(autouse=True)
@@ -83,6 +85,8 @@ def test_export_has_everything_about_you_and_nothing_secret_or_about_anyone_else
     assert "text_encrypted" not in json.dumps(data) and "gAAAAA" not in json.dumps(data)
     assert tables["google_accounts"][0]["email"] == "sam@gmail.com"
     assert "token_encrypted" not in tables["google_accounts"][0]         # the token never leaves the vault
+    assert tables["push_subscriptions"][0]["device_label"] == "Sam's phone"  # the device, never its push address
+    assert not {"endpoint_hash", "endpoint_encrypted", "keys_encrypted"} & set(tables["push_subscriptions"][0])
     assert "oauth_states" not in tables
     assert "Dad" not in json.dumps(data)                                 # nothing about anyone else
 

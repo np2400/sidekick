@@ -4,5 +4,7 @@ httpx>=0.27,<1
 pytest>=8,<10
 mcp>=1.0,<2
 mcp-server-fetch
-cryptography>=42,<60
+cryptography>=46,<60
 pypdf>=4,<7
+py-vapid>=1.9,<2
+http-ece>=1.2,<2

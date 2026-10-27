@@ -15,8 +15,8 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 
-from app import (daily, gmail, google_auth, google_web, jobs, memory, native_tasks, reminders, settings, uploads, users,
-                 vault, web_login)
+from app import (daily, gmail, google_auth, google_web, jobs, memory, native_tasks, push, reminders, settings, uploads,
+                 users, vault, web_login)
 from app.agent import PENDING, decide
 from app.config import TASK_BACKEND, TELEGRAM_OWNER_ID
 from app.trace import ToolContext
@@ -151,6 +151,52 @@ def act(kind: str, action_id: int, account_id: int = Depends(signed_in)) -> dict
     reply = decide(ctx, approve=kind == "approve", action_id=action_id)
     memory.remember(account_id, f"[tapped {kind}]", reply, conversation_id=conversation_id)  # what was decided
     return {"reply": reply}
+
+
+# --- Notifications (W6a): this account's devices, and a test --------------------------------------------------
+
+class Subscription(BaseModel):
+    """What the browser's pushManager.subscribe() returns, plus a name for the device."""
+    endpoint: str = Field(max_length=1000)
+    keys: dict[str, str]
+    label: str = Field(default="", max_length=60)
+
+
+@router.get("/push")
+def push_setup(account_id: int = Depends(signed_in)) -> dict:
+    """The key the page subscribes with (null: notifications aren't set up on this server) and your devices."""
+    return {"public_key": push.VAPID_PUBLIC_KEY if push.configured() else None, "devices": push.devices(account_id)}
+
+
+@router.post("/push/subscriptions", dependencies=[Depends(from_our_pages)])
+def add_device(subscription: Subscription, account_id: int = Depends(signed_in)) -> dict:
+    if not push.configured():
+        raise HTTPException(status_code=503, detail="notifications aren't set up on this server")
+    try:
+        device_id = push.subscribe(account_id, subscription.endpoint, subscription.keys.get("p256dh", ""),
+                                   subscription.keys.get("auth", ""), subscription.label)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="not a push subscription")
+    except vault.VaultError:
+        raise HTTPException(status_code=503, detail="Sidekick can't store it safely right now")
+    log.info("Push device %s added for %s", device_id, account_id)
+    return {"id": device_id, "devices": push.devices(account_id)}
+
+
+@router.delete("/push/subscriptions/{device_id}", dependencies=[Depends(from_our_pages)])
+def remove_device(device_id: int, account_id: int = Depends(signed_in)) -> dict:
+    if not push.remove(account_id, device_id):
+        raise HTTPException(status_code=404, detail="not found")
+    return {"devices": push.devices(account_id)}
+
+
+@router.post("/push/test", dependencies=[Depends(from_our_pages)])
+def test_notification(account_id: int = Depends(signed_in)) -> dict:
+    """A notification to every device of yours: proves it arrives, also with the app closed."""
+    if not push.configured():
+        raise HTTPException(status_code=503, detail="notifications aren't set up on this server")
+    sent = push.send(account_id, "Sidekick", "Notifications work on this device. ✅", url="/app/settings", tag="test")
+    return {**sent, "devices": push.devices(account_id)}
 
 
 def _queue(account_id: int, key: str, conversation_id: int, message: NewMessage, file: bytes | None) -> int | None:

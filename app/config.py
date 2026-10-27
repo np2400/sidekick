@@ -44,6 +44,10 @@ GOOGLE_WEB_CLIENT_ID = os.getenv("GOOGLE_WEB_CLIENT_ID", "")
 GOOGLE_WEB_CLIENT_SECRET = os.getenv("GOOGLE_WEB_CLIENT_SECRET", "")
 SECRETS_KEY = os.getenv("SECRETS_KEY", "")
 SIDEKICK_DOMAIN = os.getenv("SIDEKICK_DOMAIN", "")
+# Web Push (W6): Sidekick's signing key pair. Make one with: python -m app.push keys. The private key stays in
+# .env; losing it silently breaks every device's notifications (they'd have to allow them again).
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
 
 # Fair use: AI requests a member may make per day (their local day). The owner has no limit.
 MEMBER_DAILY_LIMIT = int(os.getenv("MEMBER_DAILY_LIMIT") or 50)

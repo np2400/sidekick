@@ -17,6 +17,7 @@ PERSONAL = {  # table -> column holding the person's account id (chat_id means a
     "daily_runs": "chat_id", "google_accounts": "chat_id", "oauth_states": "chat_id",
     "accounts": "id", "identities": "account_id", "conversations": "account_id", "chat_messages": "account_id",
     "sessions": "account_id", "link_codes": "account_id", "pending_links": "account_id", "jobs": "account_id",
+    "push_subscriptions": "account_id",
     # Legacy, kept for rollback: these hold the Telegram id, which equals the account id for every account
     # born in Telegram (the only kind until W3, when web-born accounts arrive and `users` stops being written).
     "users": "telegram_id", "invites": "used_by",
@@ -24,7 +25,8 @@ PERSONAL = {  # table -> column holding the person's account id (chat_id means a
 # deliveries belong to a reminder (reminder_id), so they go with the person's reminders; job_effects with jobs;
 # action_conversations with pending_actions.
 SECRET_COLUMNS = {"google_accounts": {"token_encrypted"},   # never exported: the export file is not a vault
-                  "sessions": {"token_hash"}}
+                  "sessions": {"token_hash"},
+                  "push_subscriptions": {"endpoint_hash", "endpoint_encrypted", "keys_encrypted"}}
 NOT_EXPORTED = {"oauth_states", "link_codes", "pending_links", "jobs"}  # short-lived internals (jobs: wiped)
 READABLE = {"conversations": ("title_encrypted", "title"), "chat_messages": ("text_encrypted", "text")}  # your own words
 
@@ -84,6 +86,7 @@ def remove_member(account_id: int) -> None:
                      "(SELECT subject FROM identities WHERE account_id = ? AND provider = 'telegram')", (account_id,))
         conn.execute("UPDATE reminders SET status = 'cancelled' WHERE chat_id = ? AND status = 'active'", (account_id,))
         conn.execute("DELETE FROM sessions WHERE account_id = ?", (account_id,))  # signed out of the web, everywhere
+        conn.execute("DELETE FROM push_subscriptions WHERE account_id = ?", (account_id,))  # no more notifications
     log.info("Removed member %s", account_id)
 
 

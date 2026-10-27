@@ -76,9 +76,9 @@ const PROBLEMS: Record<number, string> = {
   422: "Sidekick couldn't take that message: it's too long (4,000 characters at most), or the file isn't a real photo or PDF.",
 };
 
-async function post<T>(path: string, body?: object): Promise<Result<T>> {
+async function post<T>(path: string, body?: object, method = "POST"): Promise<Result<T>> {
   const init: RequestInit = {
-    method: "POST", credentials: "same-origin",
+    method, credentials: "same-origin",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
   };
@@ -123,6 +123,18 @@ export const jobStatus = (jobId: number) => get<JobStatus>(`jobs/${jobId}`);
 /** ✅ or ❌ under a proposal. The server decides it exactly once; the reply says what happened. */
 export const decideProposal = (kind: "approve" | "reject", actionId: number) =>
   post<{ reply: string }>(`actions/${kind}/${actionId}`);
+
+/** Notifications (W6a): this account's devices. The server never sends back a device's push address. */
+export type Device = { id: number; label: string; status: "active" | "gone"; added: string; last_ok: string | null };
+export type PushSetup = { public_key: string | null; devices: Device[] };
+export type PushTest = { sent: number; failed: number; gone: number; devices: Device[] };
+
+export const getPush = () => get<PushSetup>("push");
+export const addDevice = (subscription: PushSubscriptionJSON, label: string) =>
+  post<{ id: number; devices: Device[] }>("push/subscriptions",
+    { endpoint: subscription.endpoint, keys: subscription.keys, label });
+export const removeDevice = (id: number) => post<{ devices: Device[] }>(`push/subscriptions/${id}`, undefined, "DELETE");
+export const testNotification = () => post<PushTest>("push/test");
 
 /** The sidebar listens for this: a new conversation, or a new message moving one to the top. */
 export const CONVERSATIONS_CHANGED = "sidekick:conversations-changed";
