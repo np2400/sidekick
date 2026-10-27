@@ -181,7 +181,10 @@ function Thread({ id, version, onView }: { id: string; version: number; onView: 
         const file = files.get(i);
         return (
           <div key={i} className={`msg ${m.role}`}>
-            <div className="msg-bubble">{file ? <><FileView file={file} onView={onView} />{file.text}</> : m.text}</div>
+            {file && !file.pdf && <FileView file={file} onView={onView} />}
+            {(!file || file.pdf || file.text) && (
+              <div className="msg-bubble">{file ? <>{file.pdf && <FileView file={file} onView={onView} />}{file.text}</> : m.text}</div>
+            )}
             <span className="msg-meta">{m.channel === "telegram" ? "Telegram · " : ""}{when(m.at)}</span>
           </div>
         );
@@ -190,10 +193,13 @@ function Thread({ id, version, onView }: { id: string; version: number; onView: 
         const file = local.find((f) => f.jobId === w.job_id);
         return (
           <div key={w.job_id} className="msg user">
-            <div className="msg-bubble">
-              {file ? <FileView file={file} onView={onView} /> : w.attachment && <AttachedLabel attachment={w.attachment} />}
-              {w.text}
-            </div>
+            {file && !file.pdf && <FileView file={file} onView={onView} />}
+            {(!file || file.pdf || w.text) && (
+              <div className="msg-bubble">
+                {file ? file.pdf && <FileView file={file} onView={onView} /> : w.attachment && <AttachedLabel attachment={w.attachment} />}
+                {w.text}
+              </div>
+            )}
             <span className="msg-meta">Sent</span>
           </div>
         );
