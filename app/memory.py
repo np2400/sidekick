@@ -75,7 +75,7 @@ def transcript(account_id: int, conversation_id: int) -> dict | None:
 
 
 # Markers saved in place of things that aren't text, shown readably: (as a title, inside the conversation).
-MARKERS = {"[sent a photo]": ("Photo", "📷 Photo (photos aren't saved)"), "[sent a PDF]": ("PDF", "📄 PDF (not saved)"),
+MARKERS = {"[sent a photo]": ("Photo", "📷 Photo"), "[sent a PDF]": ("PDF", "📄 PDF"),
            "[morning brief]": ("Morning brief", "☀️ Morning brief"),
            "[tapped approve]": ("Approved", "✅ Yes"), "[tapped reject]": ("Declined", "❌ No")}
 

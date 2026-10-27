@@ -114,4 +114,4 @@ def test_markers_for_photos_and_the_brief_read_like_words(people):
     assert titles[:2] == ["Morning brief", "Photo: what is this?"]
     photo = next(c for c in me.get("/api/conversations").json() if c["title"].startswith("Photo"))
     first = me.get(f"/api/conversations/{photo['id']}").json()["messages"][0]["text"]
-    assert first == "📷 Photo (photos aren't saved) what is this?"
+    assert first == "📷 Photo what is this?"

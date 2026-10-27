@@ -301,7 +301,7 @@ def test_a_photo_goes_to_the_vision_model_and_only_a_mark_is_kept(web):
     me = web["browser"](OWNER)
     sent = new_chat_with(me, attach("IMG_0042.jpg", PHOTO), "what is this?").json()
     assert web["inputs"][-1]["images"] == [("image/jpeg", PHOTO)] and web["inputs"][-1]["text"] == "what is this?"
-    assert said(me, sent["conversation_id"]) == [("user", "📷 Photo (photos aren't saved) what is this?", "web"),
+    assert said(me, sent["conversation_id"]) == [("user", "📷 Photo what is this?", "web"),
                                                  ("assistant", "reply to what is this?", "web")]
     assert len(waiting_files()) == 1  # kept 10 minutes for follow-up questions, encrypted
 
@@ -314,7 +314,7 @@ def test_a_pdf_is_read_for_the_answer_and_the_conversation_keeps_only_a_mark(web
     assert asked["text"].startswith("what's the total?") and "Invoice total 42 dollars" in asked["text"]
     assert asked["private"] is True  # only models allowed to see private content, as for email
     shown = said(me, sent["conversation_id"])
-    assert shown[0] == ("user", "📄 PDF (not saved) invoice.pdf · what's the total?", "web")
+    assert shown[0] == ("user", "📄 PDF invoice.pdf · what's the total?", "web")
     with db.connect() as conn:
         boxes = [r[0] for r in conn.execute("SELECT text_encrypted FROM chat_messages")]
     assert not any("Invoice total" in memory._open(b) for b in boxes[:-1])  # only the model's own reply may quote it
@@ -447,7 +447,7 @@ def test_a_file_whose_message_was_given_up_on_or_not_answered_is_deleted_too(web
         work()
         with db.connect() as conn:
             conn.execute("UPDATE jobs SET lease_until = datetime('now', '-1 second') WHERE status = 'running'")
-    assert said(me, sent["conversation_id"]) == [("user", "📷 Photo (photos aren't saved) crash", "web"),
+    assert said(me, sent["conversation_id"]) == [("user", "📷 Photo crash", "web"),
                                                  ("assistant", jobs.GAVE_UP, "web")]
     assert waiting_files() == []
 

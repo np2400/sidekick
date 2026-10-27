@@ -3,8 +3,8 @@ import {
 } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  conversationsChanged, decideProposal, getConversation, jobStatus, sendMessage, type Attached, type Result,
-  type Transcript, type Unavailable,
+  conversationsChanged, decideProposal, getConversation, jobStatus, sendMessage, type Attached, type Message,
+  type Result, type Transcript, type Unavailable,
 } from "../api";
 import { EmptyState, Skeleton } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
@@ -59,6 +59,44 @@ function AttachedLabel({ attachment }: { attachment: Attached }) {
   return <span className="msg-attached">{attachment.type === "application/pdf" ? `📄 ${attachment.name}` : "📷 Photo"}</span>;
 }
 
+/** A photo or PDF sent from this page. Only this browser has it, in memory: the chat can show it until the page
+ *  is reloaded. Sidekick itself doesn't store it (it keeps its own copy 10 minutes for follow-up questions). */
+type LocalFile = { url: string; pdf: boolean; name: string; text: string; jobId: number };
+const SENT = new Map<number, LocalFile[]>();  // conversation id -> files sent from this page
+
+/** How the server shows a message that came with this file (app/memory.py MARKERS). */
+const shownAs = (f: LocalFile) =>
+  f.pdf ? `📄 PDF ${f.name}${f.text ? ` · ${f.text}` : ""}` : `📷 Photo ${f.text}`.trim();
+
+/** Which saved messages came with a file sent from this page: newest first, so an older look-alike isn't matched. */
+function withFiles(messages: Message[], files: LocalFile[]): Map<number, LocalFile> {
+  const found = new Map<number, LocalFile>();
+  const left = [...files];
+  for (let i = messages.length - 1; i >= 0 && left.length > 0; i--) {
+    if (messages[i].role !== "user") continue;
+    for (let k = left.length - 1; k >= 0; k--) {
+      if (shownAs(left[k]) === messages[i].text) {
+        found.set(i, left[k]);
+        left.splice(k, 1);
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+function FileView({ file, onView }: { file: LocalFile; onView: (url: string) => void }) {
+  if (file.pdf) {
+    return <a className="msg-attached msg-link" href={file.url} target="_blank" rel="noopener">📄 {file.name}</a>;
+  }
+  return (
+    <button type="button" className="msg-photo" onClick={() => onView(file.url)} aria-label="View the photo"
+      title="Shown from this browser only: Sidekick doesn't store photos">
+      <img src={file.url} alt="Your photo" />
+    </button>
+  );
+}
+
 type Attachment = { id: string; file: File; preview?: string };
 
 const clock = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
@@ -69,7 +107,7 @@ const when = (iso: string) =>
 
 /** One conversation, exactly as saved (in Telegram or here), plus what's still being answered and a proposal
  *  waiting for a yes or no. `version` goes up when a message was just sent: reload in place. */
-function Thread({ id, version }: { id: string; version: number }) {
+function Thread({ id, version, onView }: { id: string; version: number; onView: (url: string) => void }) {
   const [result, setResult] = useState<Result<Transcript> | null>(null);
   const [deciding, setDeciding] = useState(false);
   const [decideProblem, setDecideProblem] = useState<string | null>(null);
@@ -123,6 +161,9 @@ function Thread({ id, version }: { id: string; version: number }) {
     setDeciding(false);
   }
 
+  const local = SENT.get(Number(id)) ?? [];
+  const files = thread ? withFiles(thread.messages, local) : new Map<number, LocalFile>();
+
   if (result === null) return <div className="thread"><Skeleton lines={6} /></div>;
   if (thread === null) {
     return <EmptyState icon="history" title="Couldn't open this conversation"
@@ -136,18 +177,27 @@ function Thread({ id, version }: { id: string; version: number }) {
           {thread.origin === "telegram" ? "Started in Telegram" : "Started here"} · kept for 30 days after the last message
         </p>
       </header>
-      {thread.messages.map((m, i) => (
-        <div key={i} className={`msg ${m.role}`}>
-          <div className="msg-bubble">{m.text}</div>
-          <span className="msg-meta">{m.channel === "telegram" ? "Telegram · " : ""}{when(m.at)}</span>
-        </div>
-      ))}
-      {thread.waiting.map((w) => (
-        <div key={w.job_id} className="msg user">
-          <div className="msg-bubble">{w.attachment && <AttachedLabel attachment={w.attachment} />}{w.text}</div>
-          <span className="msg-meta">Sent</span>
-        </div>
-      ))}
+      {thread.messages.map((m, i) => {
+        const file = files.get(i);
+        return (
+          <div key={i} className={`msg ${m.role}`}>
+            <div className="msg-bubble">{file ? <><FileView file={file} onView={onView} />{file.text}</> : m.text}</div>
+            <span className="msg-meta">{m.channel === "telegram" ? "Telegram · " : ""}{when(m.at)}</span>
+          </div>
+        );
+      })}
+      {thread.waiting.map((w) => {
+        const file = local.find((f) => f.jobId === w.job_id);
+        return (
+          <div key={w.job_id} className="msg user">
+            <div className="msg-bubble">
+              {file ? <FileView file={file} onView={onView} /> : w.attachment && <AttachedLabel attachment={w.attachment} />}
+              {w.text}
+            </div>
+            <span className="msg-meta">Sent</span>
+          </div>
+        );
+      })}
       {thread.waiting.length > 0 && (
         <div className="msg assistant" role="status">
           <div className="msg-bubble thinking"><span className="dots" aria-hidden="true"><i /><i /><i /></span>
@@ -192,6 +242,7 @@ export default function Chat() {
   const [notice, setNotice] = useState<Unavailable | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [viewing, setViewing] = useState<string | null>(null);  // a photo shown full size
   const input = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
 
@@ -201,6 +252,13 @@ export default function Chat() {
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
   }, [text]);
+
+  useEffect(() => {
+    if (!viewing) return;
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && setViewing(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [viewing]);
 
   const latest = useRef(files);  // previews are browser memory: free them when leaving the page
   latest.current = files;
@@ -218,8 +276,7 @@ export default function Chat() {
     } else if (file.size > (pdf ? MAX_PDF_MB : MAX_PHOTO_MB) * 1024 * 1024) {
       setProblem(`Not added: ${file.name} (over ${pdf ? MAX_PDF_MB : MAX_PHOTO_MB} MB).`);
     } else {
-      setFiles([{ id: `${file.name}-${file.size}-${file.lastModified}`, file,
-                  preview: pdf ? undefined : URL.createObjectURL(file) }]);
+      setFiles([{ id: `${file.name}-${file.size}-${file.lastModified}`, file, preview: URL.createObjectURL(file) }]);
       setProblem(null);
     }
   }
@@ -252,8 +309,17 @@ export default function Chat() {
     } else if (result.state === "unavailable") {
       setNotice(result);  // nothing was sent: keep what they wrote
     } else {
+      const sent = files[0];
+      if (sent && attachment) {  // keep it in this page's memory so the chat can show it (never sent anywhere else)
+        const pdf = attachment.type === "application/pdf";
+        const url = pdf ? sent.preview! : URL.createObjectURL(
+          new Blob([Uint8Array.from(atob(attachment.data), (c) => c.charCodeAt(0))], { type: "image/jpeg" }));
+        if (!pdf) URL.revokeObjectURL(sent.preview!);  // the smaller copy that was sent replaces the original
+        const list = SENT.get(result.data.conversation_id) ?? [];
+        SENT.set(result.data.conversation_id, [...list, { url, pdf, name: sent.file.name, text: text.trim(),
+                                                          jobId: result.data.job_id }]);
+      }
       setText("");
-      files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
       setFiles([]);
       if (id) setVersion((v) => v + 1);  // shows the message, waiting for its answer
       else navigate(`/app/chat/${result.data.conversation_id}`);
@@ -288,7 +354,7 @@ export default function Chat() {
       onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
       onDrop={onDrop}>
       <div className="chat-scroll">
-        {id ? <Thread id={id} version={version} /> : <div className="chat-welcome">
+        {id ? <Thread id={id} version={version} onView={setViewing} /> : <div className="chat-welcome">
           <span className="welcome-mark"><Icon name="sparkles" size={26} /></span>
           <h1>What can I help with?</h1>
           <p className="muted">
@@ -324,7 +390,13 @@ export default function Chat() {
             <ul className="attachments" aria-label="Attached files">
               {files.map((a) => (
                 <li key={a.id} className="attachment">
-                  {a.preview ? <img src={a.preview} alt="" /> : <span className="file-badge"><Icon name="file" size={18} /></span>}
+                  {a.file.type === "application/pdf" ? (
+                    <a className="file-badge" href={a.preview} target="_blank" rel="noopener" aria-label={`Open ${a.file.name}`}
+                      title="Open the PDF"><Icon name="file" size={18} /></a>
+                  ) : (
+                    <button type="button" className="attachment-open" onClick={() => setViewing(a.preview!)}
+                      aria-label={`View ${a.file.name}`} title="View the photo"><img src={a.preview} alt="" /></button>
+                  )}
                   <span className="attachment-text">
                     <span className="attachment-name">{a.file.name}</span>
                     <span className="attachment-meta">{a.file.type === "application/pdf" ? "PDF" : "Photo"} · {formatSize(a.file.size)}</span>
@@ -357,6 +429,15 @@ export default function Chat() {
           are deleted after 10 minutes.
         </p>
       </div>
+
+      {viewing && (
+        <div className="lightbox" role="dialog" aria-modal="true" aria-label="Photo" onClick={() => setViewing(null)}>
+          <img src={viewing} alt="Your photo, full size" onClick={(e) => e.stopPropagation()} />
+          <button type="button" className="icon-btn lightbox-close" onClick={() => setViewing(null)} aria-label="Close">
+            <Icon name="x" />
+          </button>
+        </div>
+      )}
 
       {dragging && (
         <div className="drop-overlay" aria-hidden="true">
