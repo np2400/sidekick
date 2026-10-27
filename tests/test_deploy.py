@@ -23,8 +23,9 @@ class FakeShell:
             return self.target
         if cmd[:2] == ("git", "log"):
             return "Read PDF attachments"
-        if cmd[:3] == ("docker", "compose", "up") and self.build_fails:
-            raise subprocess.CalledProcessError(1, cmd)
+        if cmd[:3] == ("docker", "compose", "up") and self.build_fails and len(self.ran("docker", "compose", "up")) == 1:
+            raise subprocess.CalledProcessError(1, cmd, stderr="Container sidekick-caddy-1 Creating\nError response "
+                                                "from daemon: ... mkdirat .../srv/web: read-only file system")
         if cmd == WEB_BUILD and self.web_build_fails and len(self.ran(*WEB_BUILD)) == 1:  # the new version's
             raise subprocess.CalledProcessError(1, cmd)
         return ""
@@ -74,17 +75,22 @@ def test_an_unhealthy_deploy_rolls_back_and_is_not_retried_every_5_minutes(faile
     assert deploy(sh, healthy=lambda: False, failed_file=failed_file) == f"rolled back {NEW[:7]}"
     assert sh.ran("git", "reset", "-q", "--hard", OLD)                 # code back to the working version...
     assert len(sh.ran("docker", "compose", "up", "-d", "--build")) == 2  # ...and the old container rebuilt
-    assert "Rolled back" in sh.notified()[0] and failed_file.read_text() == NEW
+    assert "failed its health check. Rolled back" in sh.notified()[0] and failed_file.read_text() == NEW
 
     again = FakeShell()
     assert deploy(again, healthy=lambda: True, failed_file=failed_file) == "skipped: this version failed before"
     assert not again.ran("git", "merge")
 
 
-def test_a_build_failure_also_rolls_back(failed_file):
+def test_a_build_failure_also_rolls_back_and_says_what_failed(failed_file, capsys):
+    """Regression (Oct 26): compose couldn't start Caddy, and the notice blamed the health check."""
     sh = FakeShell(build_fails=True)
     assert deploy(sh, healthy=lambda: True, failed_file=failed_file) == f"rolled back {NEW[:7]}"
     assert sh.ran("git", "reset", "-q", "--hard", OLD)
+    notice = sh.notified()[-1]
+    assert "docker compose up -d exited with 1" in notice and "read-only file system" in notice
+    assert "health check" not in notice and "journalctl -u sidekick-deploy" in notice
+    assert "read-only file system" in capsys.readouterr().out  # the whole error is kept in the server's journal
 
 
 def test_a_newer_hand_deployed_version_is_left_alone(failed_file):

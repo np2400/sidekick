@@ -60,13 +60,18 @@ def deploy(sh: Shell, healthy=healthy, failed_file: Path = REPO / ".deploy-faile
     build_web = not web_built.exists() or not sh.succeeds("git", "diff", "--quiet", current, target, "--", "web")
 
     sh.run("git", "merge", "--ff-only", "-q", target)
+    failure = "failed its health check"
     try:
         if build_web:
             sh.run(*WEB_BUILD)
         sh.run("docker", "compose", "up", "-d", "--build")
         ok = healthy()
-    except subprocess.CalledProcessError:  # e.g. the image didn't build: the old container is still running
+    except subprocess.CalledProcessError as exc:  # e.g. the image didn't build: the old container is still running
         ok = False
+        failure = f"failed: {' '.join(exc.cmd[:4])} exited with {exc.returncode}"
+        last = (exc.stderr or "").strip().splitlines()[-1:]  # the error itself, e.g. "...: read-only file system"
+        failure += f" ({last[0][-200:]})" if last else ""
+        print(f"{' '.join(exc.cmd)} failed:\n{(exc.stderr or '').strip()[-2000:]}")  # kept in the journal
     if ok:
         failed_file.unlink(missing_ok=True)
         notify(sh, f"🚀 Deployed {target[:7]}: {subject}")
@@ -80,7 +85,8 @@ def deploy(sh: Shell, healthy=healthy, failed_file: Path = REPO / ".deploy-faile
     except subprocess.CalledProcessError:
         pass
     failed_file.write_text(target)
-    notify(sh, f"⚠️ Deploy of {target[:7]} ({subject}) failed its health check. Rolled back to {current[:7]}.")
+    notify(sh, f"⚠️ Deploy of {target[:7]} ({subject}) {failure}. Rolled back to {current[:7]}. "
+               "Details: journalctl -u sidekick-deploy")
     return f"rolled back {target[:7]}"
 
 

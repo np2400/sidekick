@@ -26,7 +26,7 @@
 	# /app/chat/12) loads the app, which shows the right page.
 	redir /app /app/
 	handle_path /app/* {
-		root * /srv/web/dist
+		root * /web/dist
 		try_files {path} /index.html
 		file_server
 	}
