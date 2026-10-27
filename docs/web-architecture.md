@@ -357,6 +357,23 @@ jobs (id, account_id, conversation_id, channel, source_key UNIQUE, payload_json,
   reading the answer. Only errors before sending (no connection, a failed sign-in refresh) and a 4xx are
   failures. The outcome is recorded with the job, so a retry after a crash reports it instead of asking again.
 
+**As built (W5a, web chat, migration 013):**
+- `POST /api/conversations` (a new chat with its first message) and `POST /api/conversations/{id}/messages`
+  (continue any conversation, including Telegram ones) queue a `web` job and answer 202 with the job id at once.
+  The page asks `GET /api/jobs/{id}` every second (every 3 after 20 s) and reloads the conversation when it's done.
+  A reload while waiting still shows the message: the conversation lists its `waiting` messages.
+- The reply is saved into that conversation, which is where the page reads it. Every web exchange is saved, even
+  "models unavailable", or it would never appear. A message given up on after 3 tries shows "please send it again".
+- Each message carries a `request_id` made by the page. Sending it again (the page retries once if the network
+  drops) queues it once, the same idea as Stripe's idempotency keys.
+- Every POST needs the session cookie **and** an `Origin` of Sidekick's own domain (CSRF), plus JSON. Messages are
+  at most 4,000 characters. Replies are shown as text, never as HTML. The daily limit counts both channels.
+- Approvals: `action_conversations` (new table) links a proposal to its web conversation. No row means Telegram's
+  chat. A typed yes decides only its own conversation's proposal. `POST /api/actions/{approve|reject}/{id}` decides a
+  web proposal by id, exactly once. Rolling back to W4 is safe; while rolled back, a Telegram yes could approve a
+  web proposal (one pending per account, as before W5).
+- Commands (`/brief`, ...) stay in Telegram for now; on the web they get a pointer. Photos and PDFs: W5b.
+
 **Why not Redis, Celery or SQS:** there's one server, and SQLite is already the source of truth and backed up. The
 queue lives in the same database as the data it changes. Revisit this when there's more than one app server.
 

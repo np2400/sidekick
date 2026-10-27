@@ -21,7 +21,8 @@ PERSONAL = {  # table -> column holding the person's account id (chat_id means a
     # born in Telegram (the only kind until W3, when web-born accounts arrive and `users` stops being written).
     "users": "telegram_id", "invites": "used_by",
 }
-# deliveries belong to a reminder (reminder_id), so they go with the person's reminders; job_effects with jobs.
+# deliveries belong to a reminder (reminder_id), so they go with the person's reminders; job_effects with jobs;
+# action_conversations with pending_actions.
 SECRET_COLUMNS = {"google_accounts": {"token_encrypted"},   # never exported: the export file is not a vault
                   "sessions": {"token_hash"}}
 NOT_EXPORTED = {"oauth_states", "link_codes", "pending_links", "jobs"}  # short-lived internals (jobs: wiped)
@@ -63,6 +64,8 @@ def delete_everything(chat_id: int) -> int:
                                "(SELECT id FROM reminders WHERE chat_id = ?)", (chat_id,)).rowcount
         removed += conn.execute("DELETE FROM job_effects WHERE job_id IN (SELECT id FROM jobs WHERE account_id = ?)",
                                 (chat_id,)).rowcount
+        removed += conn.execute("DELETE FROM action_conversations WHERE action_id IN "
+                                "(SELECT id FROM pending_actions WHERE chat_id = ?)", (chat_id,)).rowcount
         for table, column in PERSONAL.items():
             removed += conn.execute(f"DELETE FROM {table} WHERE {column} = ?", (chat_id,)).rowcount
     log.info("Deleted all data for %s (%d rows)", chat_id, removed)

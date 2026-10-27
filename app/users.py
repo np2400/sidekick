@@ -96,6 +96,11 @@ def remember_name(account_id: int, name: str) -> None:
             conn.execute("UPDATE accounts SET name = ? WHERE id = ? AND name = ''", (name[:64], account_id))
 
 
+def active(account_id: int) -> bool:
+    with db.connect() as conn:
+        return conn.execute("SELECT 1 FROM accounts WHERE id = ? AND status = 'active'", (account_id,)).fetchone() is not None
+
+
 def is_member(telegram_id: int) -> bool:
     return account_for("telegram", str(telegram_id)) is not None
 

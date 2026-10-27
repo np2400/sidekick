@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { getSession, listConversations, signOut } from "../api";
+import { CONVERSATIONS_CHANGED, getSession, listConversations, signOut } from "../api";
 import { EmptyState, Logo, PreviewPill, Skeleton } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
 import ThemeSwitch from "../components/ThemeSwitch";
@@ -22,7 +22,14 @@ export default function AppLayout() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const session = useResult(getSession);
-  const conversations = useResult(listConversations);
+  const [listVersion, setListVersion] = useState(0);  // bumped when a chat starts or gets an answer
+  useEffect(() => {
+    const changed = () => setListVersion((v) => v + 1);
+    window.addEventListener(CONVERSATIONS_CHANGED, changed);
+    return () => window.removeEventListener(CONVERSATIONS_CHANGED, changed);
+  }, []);
+  const loadConversations = useCallback(() => listConversations(), [listVersion]);
+  const conversations = useResult(loadConversations);
 
   useEffect(() => setOpen(false), [pathname]);  // a tap on a link closes the drawer
   useEffect(() => {

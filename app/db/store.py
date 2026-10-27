@@ -5,48 +5,74 @@ from app import db, jobs
 
 
 class PendingStore:
-    """Write actions waiting for the user's approval, one active per chat. Survives restarts."""
+    """Write actions waiting for the user's approval, one active per conversation: Telegram's chat, or one web
+    conversation (W5, linked in action_conversations). `conversation_id` None means Telegram's. Survives restarts."""
 
-    def stage(self, chat_id: int, user_id: str, tool: str, args: dict, job_id: int | None = None) -> int:
+    @staticmethod
+    def _in(conversation_id: int | None) -> tuple[str, tuple]:
+        if conversation_id is None:  # Telegram's chat: proposals linked to no web conversation
+            return "id NOT IN (SELECT action_id FROM action_conversations)", ()
+        return "id IN (SELECT action_id FROM action_conversations WHERE conversation_id = ?)", (conversation_id,)
+
+    def stage(self, chat_id: int, user_id: str, tool: str, args: dict, job_id: int | None = None,
+              conversation_id: int | None = None) -> int:
+        scope, extra = self._in(conversation_id)
         with db.connect() as conn:
-            # A new proposal replaces an older undecided one in the same chat.
+            # A new proposal replaces an older undecided one in the same conversation.
             conn.execute("UPDATE pending_actions SET status='dropped', decided_at=datetime('now') "
-                         "WHERE chat_id=? AND status='pending'", (chat_id,))
+                         f"WHERE chat_id=? AND status='pending' AND {scope}", (chat_id, *extra))
             cur = conn.execute("INSERT INTO pending_actions (user_id, chat_id, tool, args_json) VALUES (?,?,?,?)",
                                (user_id, chat_id, tool, json.dumps(args)))
+            if conversation_id is not None:
+                conn.execute("INSERT INTO action_conversations (action_id, conversation_id) VALUES (?, ?)",
+                             (cur.lastrowid, conversation_id))
             jobs.record_effect(conn, job_id, f"Proposed {tool.replace('_', ' ')}, waiting for your yes or no")
             return cur.lastrowid
 
-    def interrupted(self, chat_id: int) -> str | None:
+    def interrupted(self, chat_id: int, conversation_id: int | None = None, action_id: int | None = None) -> str | None:
         """An approval a restart cut off mid-way ('deciding' left behind): it may or may not have happened.
-        Reported once, then marked so."""
+        Reported once, then marked so. A button asks about its own proposal; a typed yes about its conversation's."""
+        scope, extra = ("id = ?", (action_id,)) if action_id is not None else self._in(conversation_id)
         with db.connect() as conn:
-            row = conn.execute("SELECT id, tool FROM pending_actions WHERE chat_id=? AND status='deciding' "
-                               "ORDER BY id DESC LIMIT 1", (chat_id,)).fetchone()
+            row = conn.execute(f"SELECT id, tool FROM pending_actions WHERE chat_id=? AND status='deciding' AND {scope} "
+                               "ORDER BY id DESC LIMIT 1", (chat_id, *extra)).fetchone()
             if row is None:
                 return None
             conn.execute("UPDATE pending_actions SET status='interrupted', decided_at=datetime('now') WHERE id=?",
                          (row["id"],))
             return row["tool"]
 
-    def peek(self, chat_id: int) -> dict | None:
+    def peek(self, chat_id: int, conversation_id: int | None = None) -> dict | None:
+        scope, extra = self._in(conversation_id)
         with db.connect() as conn:
-            row = conn.execute("SELECT * FROM pending_actions WHERE chat_id=? AND status='pending' "
-                               "ORDER BY id DESC LIMIT 1", (chat_id,)).fetchone()
+            row = conn.execute(f"SELECT * FROM pending_actions WHERE chat_id=? AND status='pending' AND {scope} "
+                               "ORDER BY id DESC LIMIT 1", (chat_id, *extra)).fetchone()
         return _as_dict(row)
 
-    def claim(self, chat_id: int, action_id: int | None = None) -> dict | None:
-        """Take the pending action so exactly ONE caller can decide it (double-tap, retry, race).
+    def claim(self, chat_id: int, action_id: int | None = None, conversation_id: int | None = None) -> dict | None:
+        """Take a pending action so exactly ONE caller can decide it (double-tap, retry, race).
 
-        The conditional UPDATE is the lock: only the request that flips 'pending' -> 'deciding' wins.
+        A typed answer takes its conversation's proposal. A button names its proposal: it must be this account's
+        and still pending (a newer proposal in the same conversation drops it, so an old button can't approve a
+        newer action). The conditional UPDATE is the lock: only the request that flips 'pending' -> 'deciding' wins.
         """
-        current = self.peek(chat_id)
-        if current is None or (action_id is not None and current["id"] != action_id):
-            return None  # nothing pending, or that button belongs to an older proposal
+        if action_id is None:
+            current = self.peek(chat_id, conversation_id)
+            if current is None:
+                return None
+            action_id = current["id"]
         with db.connect() as conn:
-            won = conn.execute("UPDATE pending_actions SET status='deciding' WHERE id=? AND status='pending'",
-                               (current["id"],)).rowcount == 1
-        return current if won else None
+            won = conn.execute("UPDATE pending_actions SET status='deciding' WHERE id=? AND chat_id=? "
+                               "AND status='pending'", (action_id, chat_id)).rowcount == 1
+            row = conn.execute("SELECT * FROM pending_actions WHERE id=?", (action_id,)).fetchone() if won else None
+        return _as_dict(row)
+
+    def conversation_of(self, chat_id: int, action_id: int) -> int | None:
+        """The web conversation this account's proposal was made in (None: Telegram's, or not this account's)."""
+        with db.connect() as conn:
+            row = conn.execute("SELECT c.conversation_id FROM action_conversations c JOIN pending_actions a "
+                               "ON a.id = c.action_id WHERE a.id = ? AND a.chat_id = ?", (action_id, chat_id)).fetchone()
+        return row[0] if row else None
 
     def finish(self, action_id: int, status: str, job_id: int | None = None, effect: str = "") -> None:
         """`effect`: what may have changed outside, recorded with the outcome so a retried job reports it."""
@@ -58,6 +84,7 @@ class PendingStore:
 
     def clear(self) -> None:
         with db.connect() as conn:
+            conn.execute("DELETE FROM action_conversations")
             conn.execute("DELETE FROM pending_actions")
 
 

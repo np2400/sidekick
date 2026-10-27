@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
-import { useParams } from "react-router-dom";
-import { getConversation, sendMessage, type Unavailable } from "../api";
-import { EmptyState, Skeleton, TelegramHint } from "../components/Common";
+import { useNavigate, useParams } from "react-router-dom";
+import {
+  conversationsChanged, decideProposal, getConversation, jobStatus, sendMessage, type Result, type Transcript,
+  type Unavailable,
+} from "../api";
+import { EmptyState, Skeleton } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
-import { useResult } from "../useResult";
 
 /** Ideas only fill the composer: they show what to ask, they are not conversations. */
 const IDEAS: { icon: IconName; text: string }[] = [
@@ -15,6 +17,12 @@ const IDEAS: { icon: IconName; text: string }[] = [
 
 const ACCEPT = "image/*,application/pdf";
 const MAX_MB = 10;
+const UPLOADS = false;  // photos and PDFs from the web: the next step (W5b)
+const UPLOADS_LATER: Unavailable = {
+  state: "unavailable", reason: "Photos and PDFs from the web come in the next step, so nothing was attached.",
+  today: "Send them to Sidekick in Telegram for now.",
+};
+const SLOW_MS = 20_000;  // after this, say that long answers (web search, email) take a while
 
 type Attachment = { id: string; file: File; preview?: string };
 
@@ -22,16 +30,67 @@ const when = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric",
                                             minute: "2-digit" });
 
-/** One saved conversation, read-only: exactly what was said, in Telegram or here. */
-function Thread({ id }: { id: string }) {
-  const load = useCallback(() => getConversation(id), [id]);
-  const result = useResult(load);
+/** One conversation, exactly as saved (in Telegram or here), plus what's still being answered and a proposal
+ *  waiting for a yes or no. `version` goes up when a message was just sent: reload in place. */
+function Thread({ id, version }: { id: string; version: number }) {
+  const [result, setResult] = useState<Result<Transcript> | null>(null);
+  const [deciding, setDeciding] = useState(false);
+  const [decideProblem, setDecideProblem] = useState<string | null>(null);
+  const [slow, setSlow] = useState(false);
+  const current = useRef(id);
+  current.current = id;
+  const end = useRef<HTMLDivElement>(null);
+
+  const load = useCallback(async () => {
+    const loaded = await getConversation(id);
+    if (current.current === id) setResult(loaded);  // a slow load of a conversation you left is dropped
+  }, [id]);
+
+  useEffect(() => { setResult(null); load(); }, [load]);           // another conversation: start fresh
+  useEffect(() => { if (version) load(); }, [version, load]);      // just sent: reload in place
+
+  const thread = result?.state === "ready" ? result.data : null;
+  const waitingFor = thread?.waiting.map((w) => w.job_id).join(",") ?? "";
+
+  useEffect(() => {  // ask about the answer every second (every 3 after a while) until it's in
+    if (!waitingFor) return;
+    const jobs = waitingFor.split(",").map(Number);
+    const started = Date.now();
+    let alive = true;
+    let timer: number | undefined;
+    const check = async () => {
+      const states = await Promise.all(jobs.map(jobStatus));
+      if (!alive) return;
+      if (states.some((s) => s.state !== "ready" || s.data.status !== "waiting")) {
+        setSlow(false);
+        await load();
+        conversationsChanged();
+        return;
+      }
+      setSlow(Date.now() - started > SLOW_MS);
+      timer = window.setTimeout(check, Date.now() - started > SLOW_MS ? 3000 : 1000);
+    };
+    timer = window.setTimeout(check, 800);
+    return () => { alive = false; window.clearTimeout(timer); };
+  }, [waitingFor, load]);
+
+  const count = (thread?.messages.length ?? 0) + (thread?.waiting.length ?? 0);
+  useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [count, thread?.proposal?.id]);
+
+  async function decide(kind: "approve" | "reject", actionId: number) {
+    setDeciding(true);
+    setDecideProblem(null);
+    const outcome = await decideProposal(kind, actionId);
+    if (outcome.state === "unavailable") setDecideProblem(outcome.reason);
+    await load();
+    setDeciding(false);
+  }
+
   if (result === null) return <div className="thread"><Skeleton lines={6} /></div>;
-  if (result.state !== "ready") {
+  if (thread === null) {
     return <EmptyState icon="history" title="Couldn't open this conversation"
       body={result.state === "unavailable" ? result.reason : "Sign in to see your conversations."} />;
   }
-  const thread = result.data;
   return (
     <div className="thread">
       <header className="thread-head">
@@ -46,6 +105,32 @@ function Thread({ id }: { id: string }) {
           <span className="msg-meta">{m.channel === "telegram" ? "Telegram · " : ""}{when(m.at)}</span>
         </div>
       ))}
+      {thread.waiting.map((w) => (
+        <div key={w.job_id} className="msg user">
+          <div className="msg-bubble">{w.text}</div>
+          <span className="msg-meta">Sent</span>
+        </div>
+      ))}
+      {thread.waiting.length > 0 && (
+        <div className="msg assistant" role="status">
+          <div className="msg-bubble thinking"><span className="dots" aria-hidden="true"><i /><i /><i /></span>
+            {slow ? "Still working on it: web searches and email can take a minute." : "Thinking…"}</div>
+        </div>
+      )}
+      {thread.proposal && thread.waiting.length === 0 && (
+        <div className="proposal" role="group" aria-label={`Waiting for your OK: ${thread.proposal.action}`}>
+          <p><Icon name="info" size={16} /> Waiting for your OK: <strong>{thread.proposal.action}</strong>. Nothing
+            changes until you answer.</p>
+          <div className="proposal-actions">
+            <button className="btn btn-primary btn-sm" disabled={deciding}
+              onClick={() => decide("approve", thread.proposal!.id)}>✅ Yes</button>
+            <button className="btn btn-secondary btn-sm" disabled={deciding}
+              onClick={() => decide("reject", thread.proposal!.id)}>❌ No</button>
+          </div>
+          {decideProblem && <p className="composer-problem" role="alert">{decideProblem}</p>}
+        </div>
+      )}
+      <div ref={end} />
     </div>
   );
 }
@@ -56,7 +141,10 @@ function formatSize(bytes: number) {
 
 export default function Chat() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [version, setVersion] = useState(0);
   const [files, setFiles] = useState<Attachment[]>([]);
   const [notice, setNotice] = useState<Unavailable | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -76,6 +164,10 @@ export default function Chat() {
   useEffect(() => () => latest.current.forEach((f) => f.preview && URL.revokeObjectURL(f.preview)), []);
 
   function addFiles(list: FileList | File[]) {
+    if (!UPLOADS) {
+      setNotice(UPLOADS_LATER);
+      return;
+    }
     const accepted: Attachment[] = [];
     const rejected: string[] = [];
     for (const file of Array.from(list)) {
@@ -99,9 +191,21 @@ export default function Chat() {
 
   async function submit(e?: FormEvent) {
     e?.preventDefault();
-    if (!text.trim() && files.length === 0) return;
-    const result = await sendMessage(text, files.map((f) => f.file));
-    if (result.state === "unavailable") setNotice(result);  // nothing was sent: keep what they wrote
+    if (!text.trim() || sending) return;
+    setSending(true);
+    setNotice(null);
+    const result = await sendMessage(id ? Number(id) : null, text.trim());
+    setSending(false);
+    if (result.state === "signed_out") {
+      navigate("/app/signin", { replace: true });
+    } else if (result.state === "unavailable") {
+      setNotice(result);  // nothing was sent: keep what they wrote
+    } else {
+      setText("");
+      if (id) setVersion((v) => v + 1);  // shows the message, waiting for its answer
+      else navigate(`/app/chat/${result.data.conversation_id}`);
+      conversationsChanged();
+    }
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -117,7 +221,7 @@ export default function Chat() {
     if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
   }
 
-  const canSend = text.trim().length > 0 || files.length > 0;
+  const canSend = text.trim().length > 0 && !sending;
 
   return (
     <div className={`chat${dragging ? " dragging" : ""}`}
@@ -125,12 +229,12 @@ export default function Chat() {
       onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
       onDrop={onDrop}>
       <div className="chat-scroll">
-        {id ? <Thread id={id} /> : <div className="chat-welcome">
+        {id ? <Thread id={id} version={version} /> : <div className="chat-welcome">
           <span className="welcome-mark"><Icon name="sparkles" size={26} /></span>
           <h1>What can I help with?</h1>
           <p className="muted">
-            Ask about your calendar, email, reminders and tasks, or send a photo or PDF. Your conversations,
-            including the ones in Telegram, are listed on the left; sending from the web comes in the next step.
+            Ask about your calendar, email, reminders and tasks. Your conversations, including the ones in
+            Telegram, are listed on the left: open any of them to continue it here.
           </p>
           <div className="ideas">
             {IDEAS.map((idea) => (
@@ -190,7 +294,8 @@ export default function Chat() {
         </form>
         {problem && <p className="composer-problem" role="alert">{problem}</p>}
         <p className="composer-foot">
-          Read-only preview: sending from the web comes next. <TelegramHint>message @Np_Sidekick_bot</TelegramHint>
+          Sidekick can make mistakes. Changes to your calendar or tasks always wait for your yes. Photos and PDFs:
+          send them in Telegram for now.
         </p>
       </div>
 

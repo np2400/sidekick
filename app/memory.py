@@ -7,6 +7,7 @@ trimmed, because every remembered word is resent on every model call. No key, no
 Telegram is one endless chat on screen, so it's split into conversations: a message continues the conversation of
 the previous Telegram message if that was under 2 hours ago (the old memory window), else starts a new one.
 /new starts a new one now, /forget deletes the current one, /forget_all deletes every one.
+On the web (W5) you pick the conversation: a new one, or any earlier one, including those started in Telegram.
 
 Before W2, memory lived in the `messages` table (plaintext, 7 days). It's no longer written: import_legacy() copies
 it in at startup (also whatever the previous version wrote during a rollback), and expire() drains it by age.
@@ -74,7 +75,8 @@ def transcript(account_id: int, conversation_id: int) -> dict | None:
 
 
 # Markers saved in place of things that aren't text, shown readably: (as a title, inside the conversation).
-MARKERS = {"[sent a photo]": ("Photo", "📷 Photo (photos aren't saved)"), "[morning brief]": ("Morning brief", "☀️ Morning brief")}
+MARKERS = {"[sent a photo]": ("Photo", "📷 Photo (photos aren't saved)"), "[morning brief]": ("Morning brief", "☀️ Morning brief"),
+           "[tapped approve]": ("Approved", "✅ Yes"), "[tapped reject]": ("Declined", "❌ No")}
 
 
 def _readable(text: str, title: bool = False) -> str:
@@ -98,8 +100,10 @@ def _iso(stamp: str) -> str:
     return stamp.replace(" ", "T") + "Z"
 
 
-def remember(account_id: int, user_text: str, reply: str, sensitive: bool = False) -> int | None:
-    """Save one exchange into the current Telegram conversation (or a new one). Returns the conversation id."""
+def remember(account_id: int, user_text: str, reply: str, sensitive: bool = False,
+             conversation_id: int | None = None) -> int | None:
+    """Save one exchange: into the given web conversation (if it's this account's), or else into the current
+    Telegram conversation (or a new one). Returns the conversation id."""
     try:
         boxes = [vault.lock_text(t[:MAX_SAVED_CHARS]) for t in (user_text, reply)]
         title = vault.lock_text(_title(user_text))
@@ -107,13 +111,44 @@ def remember(account_id: int, user_text: str, reply: str, sensitive: bool = Fals
         log.warning("Conversation not saved: SECRETS_KEY is not set (history is never stored unencrypted)")
         return None
     with db.connect() as conn:
-        conversation_id = _current(conn, account_id) or _start(conn, account_id, "telegram", title)
+        if conversation_id is None:
+            channel = "telegram"
+            conversation_id = _current(conn, account_id) or _start(conn, account_id, "telegram", title)
+        elif _owns(conn, account_id, conversation_id):
+            channel = "web"
+        else:
+            log.warning("Not saved: conversation %s isn't account %s's (deleted meanwhile?)", conversation_id, account_id)
+            return None
         conn.executemany("INSERT INTO chat_messages (conversation_id, account_id, role, text_encrypted, sensitive, "
-                         "channel) VALUES (?, ?, ?, ?, ?, 'telegram')",
-                         [(conversation_id, account_id, role, box, int(sensitive))
+                         "channel) VALUES (?, ?, ?, ?, ?, ?)",
+                         [(conversation_id, account_id, role, box, int(sensitive), channel)
                           for role, box in zip(("user", "assistant"), boxes)])
         conn.execute("UPDATE conversations SET last_message_at = datetime('now') WHERE id = ?", (conversation_id,))
     return conversation_id
+
+
+def start_web(account_id: int, first_message: str) -> int | None:
+    """A new conversation from the web, titled by its first message. It fills once the message is answered."""
+    try:
+        title = vault.lock_text(_title(first_message))
+    except vault.VaultError:
+        log.warning("Conversation not started: SECRETS_KEY is not set (history is never stored unencrypted)")
+        return None
+    with db.connect() as conn:
+        return _start(conn, account_id, "web", title)
+
+
+def owns(account_id: int, conversation_id: int) -> bool:
+    with db.connect() as conn:
+        return _owns(conn, account_id, conversation_id)
+
+
+def discard_if_empty(account_id: int, conversation_id: int) -> None:
+    """Undo start_web when nothing was queued for it after all (the same message was sent twice)."""
+    with db.connect() as conn:
+        conn.execute("DELETE FROM conversations WHERE id = ? AND account_id = ? AND NOT EXISTS "
+                     "(SELECT 1 FROM chat_messages WHERE conversation_id = ?)", (conversation_id, account_id,
+                                                                                 conversation_id))
 
 
 def new_conversation(account_id: int) -> bool:
@@ -202,6 +237,11 @@ def _current(conn, account_id: int) -> int | None:
     return row["conversation_id"] if row and row["recent"] and not row["closed"] else None
 
 
+def _owns(conn, account_id: int, conversation_id: int) -> bool:
+    return conn.execute("SELECT 1 FROM conversations WHERE id = ? AND account_id = ?",
+                        (conversation_id, account_id)).fetchone() is not None
+
+
 def _start(conn, account_id: int, origin: str, title: str, at: str | None = None) -> int:
     at = at or datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     return conn.execute("INSERT INTO conversations (account_id, origin, title_encrypted, created_at, last_message_at) "
@@ -209,10 +249,13 @@ def _start(conn, account_id: int, origin: str, title: str, at: str | None = None
 
 
 def _delete(conn, where: str, params: tuple) -> int:
-    """Delete matching messages, their old-table originals, and conversations left empty. Returns messages gone."""
+    """Delete matching messages, their old-table originals, and the conversations they leave empty. Returns
+    messages gone. (Only those: a web conversation just started has no messages yet, and must stay.)"""
+    touched = [r[0] for r in conn.execute(f"SELECT DISTINCT conversation_id FROM chat_messages WHERE {where}", params)]
     conn.execute(f"DELETE FROM messages WHERE id IN (SELECT legacy_id FROM chat_messages WHERE {where})", params)
     removed = conn.execute(f"DELETE FROM chat_messages WHERE {where}", params).rowcount
-    conn.execute("DELETE FROM conversations WHERE id NOT IN (SELECT DISTINCT conversation_id FROM chat_messages)")
+    conn.executemany("DELETE FROM conversations WHERE id = ? AND NOT EXISTS "
+                     "(SELECT 1 FROM chat_messages WHERE conversation_id = ?)", [(c, c) for c in touched])
     return removed
 
 

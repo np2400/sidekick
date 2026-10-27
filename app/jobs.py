@@ -70,6 +70,36 @@ def claim() -> dict | None:
     return None
 
 
+def find(source_key: str) -> dict | None:
+    """A message queued before under this key (the web sends a key per message, so sending twice queues once)."""
+    with db.connect() as conn:
+        row = conn.execute("SELECT id, payload_encrypted FROM jobs WHERE source_key = ?", (source_key,)).fetchone()
+    return None if row is None else {"id": row["id"], "payload": _open(row["payload_encrypted"])}
+
+
+def status(account_id: int, job_id: int) -> str | None:
+    """For the web page waiting on its message: "waiting", "done" or "failed". None if it isn't this account's.
+    Finished jobs are deleted after a week: by then the answer is long in the conversation."""
+    with db.connect() as conn:
+        row = conn.execute("SELECT status FROM jobs WHERE id = ? AND account_id = ?", (job_id, account_id)).fetchone()
+    if row is None:
+        return None
+    return "waiting" if row[0] in ("queued", "running") else row[0]
+
+
+def waiting(account_id: int, conversation_id: int) -> list[dict]:
+    """A web conversation's messages still being answered, so the page shows them (and waits) even after a reload."""
+    with db.connect() as conn:
+        rows = conn.execute("SELECT id, payload_encrypted FROM jobs WHERE account_id = ? AND channel = 'web' "
+                            "AND status IN ('queued', 'running') ORDER BY id", (account_id,)).fetchall()
+    out = []
+    for row in rows:
+        payload = _open(row["payload_encrypted"]) or {}
+        if payload.get("conversation_id") == conversation_id:
+            out.append({"job_id": row["id"], "text": payload.get("text", "")})
+    return out
+
+
 def effects(job_id: int) -> list[str]:
     with db.connect() as conn:
         return [r[0] for r in conn.execute("SELECT summary FROM job_effects WHERE job_id = ? ORDER BY id", (job_id,))]
@@ -87,7 +117,7 @@ def process(job: dict, handle, deliver) -> None:
         if job["attempts"] > MAX_ATTEMPTS:
             log.error("Job %s gave up after %d attempts", job["id"], MAX_ATTEMPTS)
             _finish(job["id"], "failed")
-            deliver(job, {"text": GAVE_UP})
+            deliver(job, {"text": GAVE_UP, "gave_up": True})
             return
         reply = job["reply"]
         if reply is None:

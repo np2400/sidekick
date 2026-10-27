@@ -344,7 +344,7 @@ def run_tool(name: str, args: dict, ctx: ToolContext, tools: dict) -> dict:
         problem = check(**args) if check else None
         if problem:
             return {"error": problem}
-        PENDING.stage(ctx.chat_id, ctx.user_id, name, args, job_id=ctx.job_id)
+        PENDING.stage(ctx.chat_id, ctx.user_id, name, args, job_id=ctx.job_id, conversation_id=ctx.conversation_id)
         return {"status": "awaiting_owner_approval", "will_run": {"tool": name, "args": args}}
     return _safely(name, tool, args, ctx)
 
@@ -388,10 +388,11 @@ def interrupted_reply(tool: str) -> str:
 
 
 def handle_approval(ctx: ToolContext, text: str, tools: dict | None = None) -> str | None:
-    """A typed reply while something is pending. Returns a reply if it answered the request, otherwise None."""
+    """A typed reply while something is pending in this conversation (Telegram's chat, or one web conversation).
+    Returns a reply if it answered the request, otherwise None."""
     answer = text.strip().lower().rstrip(".!")
-    if PENDING.peek(ctx.chat_id) is None:
-        if answer in YES and (stuck := PENDING.interrupted(ctx.chat_id)):  # this "yes", retried after a restart
+    if PENDING.peek(ctx.chat_id, ctx.conversation_id) is None:
+        if answer in YES and (stuck := PENDING.interrupted(ctx.chat_id, ctx.conversation_id)):  # retried after a restart
             return interrupted_reply(stuck)
         return None
     if answer in YES:
@@ -399,7 +400,7 @@ def handle_approval(ctx: ToolContext, text: str, tools: dict | None = None) -> s
     if answer in NO:
         return decide(ctx, approve=False, tools=tools)
     # Some other message: drop the pending action and treat this as a new request.
-    dropped = PENDING.claim(ctx.chat_id)
+    dropped = PENDING.claim(ctx.chat_id, conversation_id=ctx.conversation_id)
     if dropped:
         PENDING.finish(dropped["id"], "dropped")
         log_action(ctx.user_id, ctx.chat_id, "dropped", dropped["name"])
@@ -409,16 +410,17 @@ def handle_approval(ctx: ToolContext, text: str, tools: dict | None = None) -> s
 def decide(ctx: ToolContext, approve: bool, action_id: int | None = None, tools: dict | None = None) -> str:
     """Plain Python (not the LLM) decides whether a pending write runs, and it runs at most once.
 
-    `action_id` comes from a button: it must match the CURRENT proposal, so an old button can't approve
-    a newer action. Two taps (or a retried request) race for claim(); only one wins.
+    `action_id` comes from a button: it must be this account's and still pending, so an old button can't approve
+    a newer action. Without it, the proposal of this conversation is decided. Two taps (or a retried request)
+    race for claim(); only one wins.
     Nothing here is ever retried automatically. When nobody can tell whether it happened (the service didn't
     answer, or its answer couldn't be read), the reply says so instead of "failed", which would invite a
     second try and a duplicate.
     """
     tools = tools_for(ctx) if tools is None else tools  # a member's approval runs a member's tool
-    pending = PENDING.claim(ctx.chat_id, action_id)
+    pending = PENDING.claim(ctx.chat_id, action_id, ctx.conversation_id)
     if pending is None:
-        if stuck := PENDING.interrupted(ctx.chat_id):  # a restart hit mid-approval: say so, don't guess
+        if stuck := PENDING.interrupted(ctx.chat_id, ctx.conversation_id, action_id):  # a restart hit mid-approval
             return interrupted_reply(stuck)
         return "That request was already handled or replaced."
     if not approve:

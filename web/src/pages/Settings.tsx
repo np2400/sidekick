@@ -91,7 +91,7 @@ export default function Settings() {
       </Section>
 
       <Section title="About">
-        <Row icon="info" title="Sidekick Web" body="Version 0.2: your real data, read-only. Telegram works on its own."
+        <Row icon="info" title="Sidekick Web" body="Version 0.3: chat with Sidekick here or in Telegram, in the same conversations. Photos, PDFs and notifications come next."
           control={<PreviewPill />} />
       </Section>
     </div>

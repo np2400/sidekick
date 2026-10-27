@@ -39,7 +39,7 @@ async def lifespan(_app):
     """Start the reminder scheduler and the job workers with the server, stop them on shutdown."""
     scheduler = (reminders.Scheduler(send_to_account, jobs=[daily.tick, memory.expire, jobs.expire])
                  if SCHEDULER_ENABLED else None)
-    workers = jobs.Workers(handle_telegram_job, deliver_telegram) if SCHEDULER_ENABLED else None
+    workers = jobs.Workers(handle_job, deliver_job) if SCHEDULER_ENABLED else None
     _app.state.scheduler, _app.state.workers = scheduler, workers  # /health checks them
     for part in (scheduler, workers):
         if part:
@@ -53,6 +53,13 @@ async def lifespan(_app):
 app = FastAPI(title="Sidekick", lifespan=lifespan)
 app.add_middleware(RequestIdMiddleware)
 app.include_router(web_api.router)  # Sidekick Web's API: /api/...
+
+
+def process_now() -> None:
+    """With no worker threads (tests, a laptop), process queued messages right away, through the same code."""
+    if getattr(app.state, "workers", None) is None:
+        while jobs.work_once(handle_job, deliver_job):
+            pass
 
 
 class EchoRequest(BaseModel):
@@ -256,9 +263,8 @@ def telegram_webhook(
                            "first_name": message.get("from", {}).get("first_name", "")})
     if queued is None:
         log.info("Duplicate update %s ignored", update_id)
-    elif getattr(app.state, "workers", None) is None:  # no worker threads (tests, a laptop): do it now
-        while jobs.work_once(handle_telegram_job, deliver_telegram):
-            pass
+    else:
+        process_now()
     return {"ok": True}
 
 
@@ -280,6 +286,46 @@ def handle_telegram_job(job: dict, done_before: list[str]) -> dict:
     return {"text": reply, "buttons": buttons}
 
 
+def handle_web_job(job: dict, done_before: list[str]) -> dict:
+    """The worker's side of a message typed in Sidekick Web (W5). The reply is saved into its conversation, which is
+    where the page reads it: nothing is sent anywhere."""
+    p, account_id = job["payload"], job["account_id"]
+    role = web_role(account_id)  # checked again: someone removed while their message waited gets no answer
+    if role is None or not memory.owns(account_id, p["conversation_id"]):  # ...nor a conversation deleted meanwhile
+        return {"text": None}
+    ctx = context(account_id, str(account_id), role, job_id=job["id"], conversation_id=p["conversation_id"])
+    if done_before:  # a retry of a message that already changed something: say what, don't ask the model again
+        reply = "Done before a restart:\n" + "\n".join(f"• {e}" for e in done_before)
+        memory.remember(account_id, p["text"], reply, conversation_id=ctx.conversation_id)
+        return {"text": reply}
+    return {"text": web_answer(ctx, p["text"])}
+
+
+WEB_COMMANDS = ("Commands like /brief and /reminders work in Telegram. Here, just ask in words, for example "
+                "\"what's my plan today?\"")
+
+
+def web_answer(ctx: ToolContext, text: str) -> str:
+    """A message typed in Sidekick Web: a yes or no to this conversation's proposal, or the agent. Every exchange
+    is saved, since the page shows the saved conversation (a reply that isn't saved would never appear)."""
+    if text.strip().startswith("/"):
+        reply = WEB_COMMANDS
+    elif (reply := handle_approval(ctx, text)) is None:
+        if not over_limit(ctx):  # the limit counts Telegram and the web together
+            return agent_reply(ctx, text)[0]  # saves the exchange itself
+        reply = LIMIT_REPLY
+    memory.remember(ctx.chat_id, text, reply, conversation_id=ctx.conversation_id)
+    return reply
+
+
+def deliver_web(job: dict, reply: dict) -> None:
+    """Nothing to send: the page reads the reply from the conversation. Only a message given up on still has to be
+    written there, so it doesn't just vanish."""
+    if reply.get("gave_up") and job["payload"]:
+        memory.remember(job["account_id"], job["payload"]["text"], reply["text"],
+                        conversation_id=job["payload"]["conversation_id"])
+
+
 def deliver_telegram(job: dict, reply: dict) -> None:
     """Send a job's reply. Raises if Telegram didn't take it, so the job is tried again."""
     if not reply.get("text"):
@@ -287,6 +333,18 @@ def deliver_telegram(job: dict, reply: dict) -> None:
     result = send_message(job["payload"]["chat_id"], reply["text"], buttons=reply.get("buttons"))
     if result is not None and not result.get("ok", True):
         raise RuntimeError(f"Telegram didn't accept the reply: {result.get('description')}")
+
+
+CHANNELS = {"telegram": (handle_telegram_job, deliver_telegram), "web": (handle_web_job, deliver_web)}
+
+
+def handle_job(job: dict, done_before: list[str]) -> dict:
+    """The workers' entry point (app/jobs.py): each channel answers and delivers its own way."""
+    return CHANNELS[job["channel"]][0](job, done_before)
+
+
+def deliver_job(job: dict, reply: dict) -> None:
+    CHANNELS[job["channel"]][1](job, reply)
 
 
 def answer(ctx: ToolContext, role: str, chat_id: int, text: str, photos: list) -> tuple[str, list | None]:
@@ -471,12 +529,21 @@ def who(sender_id: str) -> tuple[str, int] | None:
     return ("member", account_id) if account_id is not None else None
 
 
-def context(account_id: int, sender_id: str, role: str, job_id: int | None = None) -> ToolContext:
-    """Who this request is for. Built by the server from Telegram's sender, never from anything the model says."""
+def context(account_id: int, sender_id: str, role: str, job_id: int | None = None,
+            conversation_id: int | None = None) -> ToolContext:
+    """Who this request is for. Built by the server from Telegram's sender or the web session, never from anything
+    the model says."""
     google = google_web.connection(account_id) if role != "owner" else None  # the owner's Google is server-level
     return ToolContext(chat_id=account_id, user_id="owner" if role == "owner" else sender_id, role=role,
-                       tz=settings.timezone_of(account_id), job_id=job_id,
+                       tz=settings.timezone_of(account_id), job_id=job_id, conversation_id=conversation_id,
                        calendar=bool(google and google["calendar"]), gmail=bool(google and google["gmail"]))
+
+
+def web_role(account_id: int) -> str | None:
+    """The role of a signed-in web account, or None if it may no longer use Sidekick (removed meanwhile)."""
+    if TELEGRAM_OWNER_ID.isdigit() and account_id == users.ensure_owner(int(TELEGRAM_OWNER_ID)):
+        return "owner"
+    return "member" if users.active(account_id) else None
 
 
 def send_to_account(account_id: int, text: str, buttons: list | None = None) -> dict:
@@ -555,15 +622,16 @@ def invite_text(owner_id: int) -> str:
 
 def agent_reply(ctx: ToolContext, text: str, images: list | None = None,
                 remember_as: str | None = None) -> tuple[str, list | None]:
-    """Run the agent with the chat's recent messages; returns the reply and the buttons to show under it."""
-    past, past_sensitive = memory.history(ctx.chat_id)
+    """Run the agent with the conversation's recent messages; returns the reply and the buttons to show under it."""
+    past, past_sensitive = memory.history(ctx.chat_id, ctx.conversation_id)
     result = run_agent(text, ctx, images=images, history=past, history_sensitive=past_sensitive)
     trace_json = result.trace.to_log()
     log.info("trace %s", trace_json)
     save_trace(ctx.chat_id, result.trace.trace_id, result.trace.outcome, trace_json)  # survives redeploys
-    if result.trace.outcome not in ("llm_unavailable", "privacy_blocked"):  # failures aren't worth remembering
-        memory.remember(ctx.chat_id, remember_as or text, result.reply, result.sensitive)
-    if result.trace.outcome == "approval_staged" and (pending := PENDING.peek(ctx.chat_id)):
+    # Failures aren't worth remembering in Telegram; the web shows the saved conversation, so it keeps them.
+    if ctx.conversation_id is not None or result.trace.outcome not in ("llm_unavailable", "privacy_blocked"):
+        memory.remember(ctx.chat_id, remember_as or text, result.reply, result.sensitive, ctx.conversation_id)
+    if result.trace.outcome == "approval_staged" and (pending := PENDING.peek(ctx.chat_id, ctx.conversation_id)):
         return result.reply, approval_buttons(pending["id"])  # ✅ / ❌ under the proposal
     if result.undo_reminder_id:
         return result.reply, [("↩️ Undo", f"undo:{result.undo_reminder_id}")]  # reminders: created now, undoable

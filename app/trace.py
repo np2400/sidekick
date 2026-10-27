@@ -22,6 +22,7 @@ class ToolContext:
     calendar: bool = False    # a member who connected their own Google Calendar (/connect)
     gmail: bool = False       # ...and their own Gmail, read-only (/connect gmail)
     job_id: int | None = None  # the queued message being answered (app/jobs.py): writes record their effects
+    conversation_id: int | None = None  # the web conversation being answered (W5); None: Telegram's chat
 
 
 @dataclass
