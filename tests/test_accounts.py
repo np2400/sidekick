@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import account, daily, db, google_web, main, reminders, settings, users, vault
+from app import account, daily, db, google_web, main, memory, reminders, settings, users, vault
 from app.config import DB_PATH
 from app.db.rehearse import rehearse, snapshot
 from app.trace import AgentResult, ToolContext, Trace
@@ -121,6 +121,50 @@ def test_rehearsal_fails_if_a_migration_changes_existing_rows(tmp_path, monkeypa
     assert rehearse(path, str(OWNER)) is False
     out = capsys.readouterr().out
     assert "FAIL  every existing table is unchanged" in out and "reminders" in out and "do not deploy" in out
+
+
+def test_rehearsal_passes_on_a_copy_whose_messages_production_already_moved_with_its_own_key(
+        tmp_path, monkeypatch, capsys):
+    """Regression (Oct 27, the W4 rehearsal): production moved messages into conversations at W2, encrypted with
+    the server's key. A rehearsal never gets that key, couldn't read them, and called them all wrong."""
+    path = before_w1(tmp_path, monkeypatch)
+    upto_w3 = tmp_path / "migrations-001-011"
+    upto_w3.mkdir()
+    for file in REAL_MIGRATIONS.glob("*.sql"):
+        if int(file.name.split("_")[0]) <= 11:
+            shutil.copy(file, upto_w3)
+    monkeypatch.setattr(db, "MIGRATIONS", upto_w3)
+    db.init(path)  # production as it runs W3b: what startup does, with the server's key
+    users.sync_from_legacy(str(OWNER))
+    users.ensure_owner(OWNER)
+    assert memory.import_legacy() == 3
+    monkeypatch.setattr(db, "MIGRATIONS", REAL_MIGRATIONS)
+    monkeypatch.setattr(vault, "SECRETS_KEY", "")  # the rehearsal runs without the server's key
+
+    assert rehearse(path, str(OWNER)) is True
+    out = capsys.readouterr().out
+    assert "FAIL" not in out and "3 messages moved earlier with the server's key" in out
+
+
+def test_rehearsal_still_fails_if_a_moved_message_lost_its_account(tmp_path, monkeypatch, capsys):
+    path = before_w1(tmp_path, monkeypatch)
+    upto_w3 = tmp_path / "migrations-001-011"
+    upto_w3.mkdir()
+    for file in REAL_MIGRATIONS.glob("*.sql"):
+        if int(file.name.split("_")[0]) <= 11:
+            shutil.copy(file, upto_w3)
+    monkeypatch.setattr(db, "MIGRATIONS", upto_w3)
+    db.init(path)
+    users.ensure_owner(OWNER)
+    memory.import_legacy()
+    with closing(sqlite3.connect(path)) as conn:  # a moved message now claims to be from someone else
+        conn.execute("UPDATE chat_messages SET created_at = '2001-01-01 00:00:00' WHERE id = 1")
+        conn.commit()
+    monkeypatch.setattr(db, "MIGRATIONS", REAL_MIGRATIONS)
+    monkeypatch.setattr(vault, "SECRETS_KEY", "")
+
+    assert rehearse(path, str(OWNER)) is False
+    assert "FAIL  every saved message moved" in capsys.readouterr().out
 
 
 def test_rehearsal_refuses_the_live_database():

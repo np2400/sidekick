@@ -72,16 +72,19 @@ def mask(person) -> str:
     return f"…{str(person)[-4:]}"
 
 
-def same_message(old, copy) -> bool:
-    """An old-table message and its copy: same account, conversation of that account, same words and flags."""
+def same_message(old, copy, compare_words: bool = True) -> bool:
+    """An old-table message and its copy: same account, conversation of that account, same flags and time, and
+    (when this key can read them) the same words."""
     if copy is None or not (copy["account_id"] == copy["owner"] == old["chat_id"]):
         return False
+    if (copy["role"], copy["sensitive"], copy["created_at"]) != (old["role"], old["sensitive"], old["created_at"]):
+        return False
+    if not compare_words:
+        return copy["text_encrypted"].startswith("gAAAAA")  # still an encrypted box
     try:
-        words = vault.unlock_text(copy["text_encrypted"])
+        return vault.unlock_text(copy["text_encrypted"]) == old["text"]
     except vault.VaultError:
         return False
-    return (words, copy["role"], copy["sensitive"], copy["created_at"]) == (
-        old["text"], old["role"], old["sensitive"], old["created_at"])
 
 
 def rehearse(source: Path, owner_telegram_id: str = "") -> bool:
@@ -105,13 +108,16 @@ def rehearse(source: Path, owner_telegram_id: str = "") -> bool:
             before = snapshot(conn)
             newest = conn.execute("SELECT MAX(created_at) FROM traces").fetchone()[0] if "traces" in before else None
             owned_before = owned_rows(conn, before)
+            moved_earlier = {r[0] for r in conn.execute(  # by the server (W2), encrypted with its key
+                "SELECT legacy_id FROM chat_messages WHERE legacy_id IS NOT NULL")} if "chat_messages" in before else set()
         print(f"Copy of {source.name}: schema version {version}, {sum(t['rows'] for t in before.values())} rows "
               f"in {len(before)} tables, newest activity {newest or 'none'} UTC")
 
         db.init(work)  # the real migrations, exactly as production will run them, then what startup does
         owner = users.ensure_owner(int(owner_telegram_id)) if owner_telegram_id.isdigit() else None
         check(users.sync_from_legacy(owner_telegram_id) == 0, "accounts agree with the users table at startup")
-        if not vault.SECRETS_KEY:
+        servers_key = bool(vault.SECRETS_KEY)
+        if not servers_key:
             vault.SECRETS_KEY = Fernet.generate_key().decode()
         memory.import_legacy()
         with open_db(work) as conn:
@@ -159,10 +165,17 @@ def rehearse(source: Path, owner_telegram_id: str = "") -> bool:
             copies = {r["legacy_id"]: r for r in conn.execute(
                 "SELECT m.*, c.account_id AS owner FROM chat_messages m JOIN conversations c "
                 "ON c.id = m.conversation_id WHERE m.legacy_id IS NOT NULL")}
+            # Messages the server moved earlier are encrypted with its key, which a rehearsal never gets: for those,
+            # everything but the words is compared. Messages moved here, with this run's key, are compared word for word.
+            unreadable = moved_earlier if not servers_key else set()
             moved_wrong = [mask(m["chat_id"]) for m in old  # (rows of nobody stay behind: reported above)
-                           if m["chat_id"] in accounts and not same_message(m, copies.get(m["id"]))]
+                           if m["chat_id"] in accounts
+                           and not same_message(m, copies.get(m["id"]), compare_words=m["id"] not in unreadable)]
             check(not moved_wrong, "every saved message moved into a conversation of its own account, word for word",
                   f"{len(old)} messages" if not moved_wrong else f"wrong for: {sorted(set(moved_wrong))}")
+            if unreadable:
+                print(f"note  {len(unreadable)} messages moved earlier with the server's key: account, conversation, "
+                      "role and time compared; the words need that key, which a rehearsal never gets")
             strays = conn.execute("SELECT COUNT(*) FROM chat_messages m LEFT JOIN conversations c ON "
                                   "c.id = m.conversation_id WHERE c.id IS NULL OR c.account_id != m.account_id"
                                   ).fetchone()[0]
