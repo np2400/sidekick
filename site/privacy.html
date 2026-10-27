@@ -13,7 +13,7 @@
 <body>
 <h1>Sidekick privacy policy</h1>
 <p><em>Last updated: October 26, 2026</em> (saved conversations kept 30 days, encrypted and deletable; signing in to and chatting in Sidekick Web; photos and
-PDFs in Sidekick Web)</p>
+PDFs in Sidekick Web, kept 10 minutes for follow-up questions)</p>
 
 <p>Sidekick is a personal AI assistant on Telegram, built and run by Neel Parekh. It is used by its owner
 and a few people the owner invites with a one-time link; there is no public sign-up.</p>
@@ -57,14 +57,15 @@ and a few people the owner invites with a one-time link; there is no public sign
     keeps you signed in for 30 days after you last use it. It sets no tracking or advertising cookies.</li>
   <li><strong>Photos</strong> you send the bot or attach in Sidekick Web: passed to an AI model that can read images
     (currently Google Gemini, with Qwen on Groq as a backup) to answer you. Sidekick Web first makes a photo smaller
-    in your browser, which also removes hidden details such as the location it was taken. Sidekick does not store
-    photos.</li>
+    in your browser, which also removes hidden details such as the location it was taken. Sidekick does not keep
+    photos beyond the 10 minutes described below.</li>
   <li><strong>PDFs</strong> you attach in Sidekick Web: Sidekick reads the text of the first pages and sends it,
-    with your question, to an AI model that may see private content (the same ones as for your email). It does not
-    keep the PDF or its text: the conversation shows only that you sent a PDF and its name.</li>
-  <li>While a photo or PDF waits for its answer (usually seconds), it is held encrypted on Sidekick's server, outside
-    the database and its backups, and deleted as soon as the answer is ready (within a day at most if something goes
-    wrong).</li>
+    with your question, to an AI model that may see private content (the same ones as for your email). The
+    conversation shows only that you sent a PDF and its name, never its text.</li>
+  <li>A photo or PDF you attach in Sidekick Web is held encrypted on Sidekick's server, outside the database and its
+    backups, for 10 minutes after you send it, so you can ask more about it in that conversation (each question
+    sends it to the AI model again). Then it is deleted. It is also deleted at once if you delete your data or are
+    removed.</li>
 </ul>
 
 <h2>How it is used</h2>

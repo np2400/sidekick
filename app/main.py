@@ -310,32 +310,53 @@ WEB_COMMANDS = ("Commands like /brief and /reminders work in Telegram. Here, jus
 def web_answer(ctx: ToolContext, text: str, upload: dict | None = None) -> str:
     """A message typed in Sidekick Web: a photo or PDF with it, a yes or no to this conversation's proposal, or the
     agent. Every exchange is saved, since the page shows the saved conversation (a reply that isn't saved would
-    never appear). A file is saved only as a mark like "[sent a photo]": never the file, nor a PDF's text."""
+    never appear). A file is saved only as a mark like "[sent a photo]": never the file, nor a PDF's text. For 10
+    minutes after a file is sent, more questions in that conversation get it again (app/uploads.py)."""
     said = saved_as(text, upload)
     if upload is not None:
-        if over_limit(ctx):
-            reply = LIMIT_REPLY
-        elif (data := uploads.read(upload["token"])) is None:
-            reply = "Sorry, I couldn't open that file. Please send it again."
-        elif upload["type"] != "application/pdf":  # a photo: the same path as one sent in Telegram
-            return agent_reply(ctx, text or PHOTO_PROMPT, images=[Image(data=data, mime="image/jpeg")],
-                               remember_as=said)[0]
-        elif (document := read_pdf(data)) is None:
-            reply = "I couldn't read that PDF: it may be password-protected or damaged."
-        elif not document:
-            reply = "I couldn't find any text in that PDF. It may be scanned pages: try sending a photo of the page."
-        else:  # its text goes to the model for this answer only, as private as email
-            return agent_reply(ctx, f"{text or PDF_PROMPT}\n\n[The attached PDF \"{upload['name']}\" as text, its first "
-                                    f"{MAX_PDF_PAGES} pages at most:]\n{document[:MAX_UPLOAD_TEXT]}",
-                               remember_as=said, private=True)[0]
+        content, problem = (None, LIMIT_REPLY) if over_limit(ctx) else opened(upload)
+        if problem is None:
+            return ask_about_file(ctx, text, upload, content, said)
+        reply = problem
     elif text.strip().startswith("/"):
         reply = WEB_COMMANDS
     elif (reply := handle_approval(ctx, text)) is None:
         if not over_limit(ctx):  # the limit counts Telegram and the web together
+            recent = uploads.latest(ctx.chat_id, ctx.conversation_id)  # a file sent here in the last 10 minutes
+            content, problem = opened(recent) if recent else (None, "no file")
+            if problem is None:
+                return ask_about_file(ctx, text, recent, content, said, earlier=True)
             return agent_reply(ctx, text)[0]  # saves the exchange itself
         reply = LIMIT_REPLY
     memory.remember(ctx.chat_id, said, reply, conversation_id=ctx.conversation_id)
     return reply
+
+
+def opened(upload: dict) -> tuple[bytes | str | None, str | None]:
+    """A file ready for the model (a photo's bytes, a PDF's text), or None and what to tell the person instead."""
+    data = uploads.read(upload["token"])
+    if data is None:
+        return None, "Sorry, I couldn't open that file. Please send it again."
+    if upload["type"] != "application/pdf":
+        return data, None
+    if (document := read_pdf(data)) is None:
+        return None, "I couldn't read that PDF: it may be password-protected or damaged."
+    if not document:
+        return None, "I couldn't find any text in that PDF. It may be scanned pages: try sending a photo of the page."
+    return document, None
+
+
+def ask_about_file(ctx: ToolContext, text: str, upload: dict, content: bytes | str, said: str,
+                   earlier: bool = False) -> str:
+    """The agent, with the photo (the same path as one sent in Telegram) or the PDF's text (for this answer only,
+    as private as email). `earlier`: the file came with an earlier message in this conversation."""
+    if upload["type"] != "application/pdf":
+        return agent_reply(ctx, text or PHOTO_PROMPT, images=[Image(data=content, mime="image/jpeg")],
+                           remember_as=said)[0]
+    which = f"sent earlier in this conversation (kept {uploads.FOLLOW_UP_MINUTES} minutes)" if earlier else "attached"
+    return agent_reply(ctx, f"{text or PDF_PROMPT}\n\n[The PDF \"{upload['name']}\" {which}, as text, its first "
+                            f"{MAX_PDF_PAGES} pages at most:]\n{content[:MAX_UPLOAD_TEXT]}",
+                       remember_as=said, private=True)[0]
 
 
 PDF_PROMPT = ("Summarize this PDF. If it has dates, times or events, list them and offer to add reminders or "
@@ -363,12 +384,13 @@ def read_pdf(data: bytes) -> str | None:
 
 def deliver_web(job: dict, reply: dict) -> None:
     """Nothing to send: the page reads the reply from the conversation. Only a message given up on still has to be
-    written there, so it doesn't just vanish. Either way, its file is deleted now: the answer is saved."""
+    written there, so it doesn't just vanish. Its file then goes at once, as does one of a message that got no
+    answer (sender removed, conversation deleted); an answered one stays 10 minutes for follow-up questions."""
     payload = job["payload"] or {}
     if reply.get("gave_up") and payload:
         memory.remember(job["account_id"], saved_as(payload["text"], payload.get("upload")), reply["text"],
                         conversation_id=payload["conversation_id"])
-    if upload := payload.get("upload"):
+    if (upload := payload.get("upload")) and (reply.get("gave_up") or not reply.get("text")):
         uploads.discard(upload["token"])
 
 

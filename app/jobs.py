@@ -102,6 +102,14 @@ def waiting(account_id: int, conversation_id: int) -> list[dict]:
     return out
 
 
+def waiting_uploads() -> set[str]:
+    """Tokens of uploaded files whose message is still waiting for an answer (the sweep keeps those)."""
+    with db.connect() as conn:
+        rows = conn.execute("SELECT payload_encrypted FROM jobs WHERE channel = 'web' "
+                            "AND status IN ('queued', 'running')").fetchall()
+    return {upload["token"] for row in rows if (upload := (_open(row[0]) or {}).get("upload"))}
+
+
 def effects(job_id: int) -> list[str]:
     with db.connect() as conn:
         return [r[0] for r in conn.execute("SELECT summary FROM job_effects WHERE job_id = ? ORDER BY id", (job_id,))]

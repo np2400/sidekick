@@ -7,7 +7,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from app import db, google_web, vault
+from app import db, google_web, uploads, vault
 
 log = logging.getLogger("sidekick.account")
 
@@ -59,6 +59,7 @@ def export_data(chat_id: int) -> dict:
 def delete_everything(chat_id: int) -> int:
     """Erase every stored row about this person (revoking Google access first). Returns how many rows went."""
     google_web.disconnect(chat_id)  # revoke at Google while we still have the token
+    uploads.discard_account(chat_id)  # photos and PDFs kept for follow-up questions (10 minutes at most)
     with db.connect() as conn:  # one transaction: all or nothing
         removed = conn.execute("DELETE FROM deliveries WHERE reminder_id IN "
                                "(SELECT id FROM reminders WHERE chat_id = ?)", (chat_id,)).rowcount
@@ -76,6 +77,7 @@ def remove_member(account_id: int) -> None:
     """End a member's access: they become a stranger, their reminders stop, their Google access is revoked.
     Their other data stays until they or the owner delete it."""
     google_web.disconnect(account_id)
+    uploads.discard_account(account_id)
     with db.connect() as conn:
         conn.execute("UPDATE accounts SET status = 'removed' WHERE id = ?", (account_id,))
         conn.execute("UPDATE users SET status = 'removed' WHERE CAST(telegram_id AS TEXT) IN "  # legacy mirror

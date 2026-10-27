@@ -47,6 +47,7 @@ export default function AppLayout() {
   }
 
   const me = session?.state === "ready" ? session.data : null;
+  const latest = conversations?.state === "ready" ? conversations.data[0] : undefined;
   return (
     <div className="app">
       <aside id="sidebar" className={`sidebar${open ? " open" : ""}`} aria-label="Sidebar">
@@ -63,13 +64,18 @@ export default function AppLayout() {
         </Link>
 
         <nav className="side-nav" aria-label="Main">
-          {NAV.map((item) => (
-            <NavLink key={item.to} to={item.to} end={item.end}
-              className={({ isActive }) => `side-link${isActive ? " active" : ""}`}>
-              <Icon name={item.icon} size={18} />
-              {item.label}
-            </NavLink>
-          ))}
+          {NAV.map((item) => {
+            // "Chat" goes back to your latest conversation; only "New chat" starts a new one.
+            const chat = item.to === "/app/chat";
+            return (
+              <NavLink key={item.to} to={chat && latest ? `/app/chat/${latest.id}` : item.to} end={item.end}
+                className={({ isActive }) =>
+                  `side-link${(chat ? pathname.startsWith("/app/chat/") : isActive) ? " active" : ""}`}>
+                <Icon name={item.icon} size={18} />
+                {item.label}
+              </NavLink>
+            );
+          })}
         </nav>
 
         <section className="side-section" aria-label="Your conversations">

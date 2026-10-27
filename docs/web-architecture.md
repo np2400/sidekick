@@ -379,10 +379,13 @@ jobs (id, account_id, conversation_id, channel, source_key UNIQUE, payload_json,
   and JSON checks). The page first makes a photo a JPEG of at most 1600 px, which also drops hidden details such
   as its location. The server checks the file's first bytes (a real JPEG or PDF) and its size (5 MB for both, as
   for Gmail PDFs), whatever its name says.
-- While its message waits, the file sits in `DATA_DIR/uploads` (`app/uploads.py`): encrypted with `SECRETS_KEY`,
-  outside the database (so never in its S3 backups), on the same disk (so a restart mid-answer still finds it).
-  The job holds only a random token, never a path. The file is deleted once the answer is saved, also when the
-  message is given up on or its sender was removed; a sweep deletes anything older than a day.
+- The file sits in `DATA_DIR/uploads` (`app/uploads.py`): encrypted with `SECRETS_KEY`, with a first line saying
+  whose it is (account, conversation, type, name), outside the database (so never in its S3 backups), on the same
+  disk (so a restart mid-answer still finds it). The job holds only a random token, never a path.
+- **Kept 10 minutes** (owner's request, Oct 27): more questions in the same conversation within 10 minutes of
+  sending get the file again (the photo, or the PDF's text, routed as private); the page says until when. Then the
+  scheduler's sweep deletes it, unless its message is still waiting for an answer. Deleted at once when its message
+  is given up on or gets no answer, and when the account is removed or deletes everything.
 - A photo takes the Telegram photo path (vision models). A PDF's first 6 pages of text go to the model with the
   question for that answer only, routed like email (models allowed to see private content). The conversation
   keeps only a mark: "[sent a photo] …" or "[sent a PDF] name · …", never the file or the text.
@@ -464,6 +467,20 @@ Each milestone is: build → the owner tries it live → explain → next. Size:
 
 **Later:** long-term personal memory (account level), streaming replies, AI titles for conversations, moving the
 owner's Google sign-in onto the per-account flow, renaming `chat_id` to `account_id`, and removing Telegram.
+
+**Later, wanted by the owner: follow-up questions about an uploaded document** (added Oct 27, after W5b). Today a
+PDF's text (and a photo) is used for one answer only, so "what else is in it?" needs the file again. Goal: ask
+several questions about a PDF without uploading it again. Its own milestone, with these safeguards first:
+- **Retention:** keep the extracted text (never the file), encrypted with `SECRETS_KEY`, tied to its conversation,
+  and deleted with it (30 days, `/forget`, `/forget_all`, `/delete_me`). Possibly a shorter limit for documents.
+- **Control and privacy:** the person sees which documents a conversation holds and can delete one on its own. A
+  privacy-policy update before launch. Its text is private content: only models allowed to see it (as for email).
+- **What the model sees:** only the relevant part of the document per question, within the per-minute token
+  budget (see 18.2: the memory budget change and "decide whether an uploaded document's text is kept").
+- **Evals first:** questions that need a page the first answer didn't mention, long documents, two documents in one
+  conversation, and a document from a deleted conversation (must be gone).
+- Meanwhile: a file is kept 10 minutes for follow-up questions (W5b), and after that Sidekick says it no longer
+  has it and asks for it again, instead of guessing (system prompt; eval `memory-photo-no-longer-there`).
 
 ## 16. Migration risks and added complexity
 

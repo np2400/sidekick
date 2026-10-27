@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import {
+  useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent,
+} from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   conversationsChanged, decideProposal, getConversation, jobStatus, sendMessage, type Attached, type Result,
@@ -58,6 +60,8 @@ function AttachedLabel({ attachment }: { attachment: Attached }) {
 }
 
 type Attachment = { id: string; file: File; preview?: string };
+
+const clock = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
 const when = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric",
@@ -149,6 +153,12 @@ function Thread({ id, version }: { id: string; version: number }) {
           <div className="msg-bubble thinking"><span className="dots" aria-hidden="true"><i /><i /><i /></span>
             {slow ? "Still working on it: web searches and email can take a minute." : "Thinking…"}</div>
         </div>
+      )}
+      {thread.recent_file && thread.waiting.length === 0 && (
+        <p className="recent-file muted small">
+          {thread.recent_file.type === "application/pdf" ? `📄 ${thread.recent_file.name}` : "📷 Your photo"} is kept
+          until {clock(thread.recent_file.until)} so you can ask more about it, then deleted.
+        </p>
       )}
       {thread.proposal && thread.waiting.length === 0 && (
         <div className="proposal" role="group" aria-label={`Waiting for your OK: ${thread.proposal.action}`}>
@@ -258,6 +268,12 @@ export default function Chat() {
     }
   }
 
+  function onPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    if (e.clipboardData.files.length === 0) return;  // plain text: the box pastes it as usual
+    e.preventDefault();
+    addFiles(e.clipboardData.files);  // a screenshot, a copied photo or a PDF
+  }
+
   function onDrop(e: DragEvent) {
     e.preventDefault();
     setDragging(false);
@@ -321,7 +337,7 @@ export default function Chat() {
           )}
           <label htmlFor="message" className="sr-only">Message Sidekick</label>
           <textarea id="message" ref={input} rows={1} value={text} placeholder="Message Sidekick"
-            onChange={(e) => setText(e.target.value)} onKeyDown={onKeyDown} />
+            onChange={(e) => setText(e.target.value)} onKeyDown={onKeyDown} onPaste={onPaste} />
           <div className="composer-bar">
             <button type="button" className="icon-btn" onClick={() => picker.current?.click()}
               aria-label="Attach photos or PDFs" title="Attach photos or PDFs">
@@ -338,7 +354,7 @@ export default function Chat() {
         {problem && <p className="composer-problem" role="alert">{problem}</p>}
         <p className="composer-foot">
           Sidekick can make mistakes. Changes to your calendar or tasks always wait for your yes. Photos and PDFs
-          aren't kept.
+          are deleted after 10 minutes.
         </p>
       </div>
 

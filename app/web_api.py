@@ -89,13 +89,16 @@ def conversation_list(account_id: int = Depends(signed_in)) -> list[dict]:
 
 @router.get("/conversations/{conversation_id}")
 def conversation(conversation_id: int, account_id: int = Depends(signed_in)) -> dict:
-    """The conversation, the messages of it still being answered, and its proposal waiting for a yes or no."""
+    """The conversation, the messages of it still being answered, its proposal waiting for a yes or no, and a photo
+    or PDF sent in the last 10 minutes (more questions can still use it)."""
     found = memory.transcript(account_id, conversation_id)
     if found is None:
         raise HTTPException(status_code=404, detail="not found")
     pending = PENDING.peek(account_id, conversation_id)
+    recent = uploads.latest(account_id, conversation_id)
     return {**found, "waiting": jobs.waiting(account_id, conversation_id),
-            "proposal": {"id": pending["id"], "action": pending["name"].replace("_", " ")} if pending else None}
+            "proposal": {"id": pending["id"], "action": pending["name"].replace("_", " ")} if pending else None,
+            "recent_file": {k: recent[k] for k in ("type", "name", "until")} if recent else None}
 
 
 @router.post("/conversations", status_code=202, dependencies=[Depends(from_our_pages)])
@@ -157,8 +160,9 @@ def _queue(account_id: int, key: str, conversation_id: int, message: NewMessage,
     payload = {"conversation_id": conversation_id, "text": message.text.strip()}
     if file is not None:
         try:
-            payload["upload"] = {"token": uploads.keep(file), "type": message.attachment.type,
-                                 "name": message.attachment.name}
+            payload["upload"] = {"token": uploads.keep(file, account_id, conversation_id, message.attachment.type,
+                                                       message.attachment.name),
+                                 "type": message.attachment.type, "name": message.attachment.name}
         except vault.VaultError:
             raise HTTPException(status_code=503, detail="Sidekick can't hold files safely right now")
     log.info("Web message from %s in conversation %s (%d chars%s)", account_id, conversation_id, len(message.text),

@@ -6,7 +6,6 @@ Owner Neel = 111, member Dad = 222. Each has one conversation from Telegram, and
 import base64
 import os
 import re
-import time
 from pathlib import Path
 
 import pytest
@@ -291,16 +290,23 @@ def waiting_files() -> list[Path]:
     return sorted(uploads.DIR.iterdir()) if uploads.DIR.is_dir() else []
 
 
+def minutes_pass(minutes: float) -> None:
+    """Make every stored file look sent that long ago."""
+    for path in waiting_files():
+        then = path.stat().st_mtime - minutes * 60
+        os.utime(path, (then, then))
+
+
 def test_a_photo_goes_to_the_vision_model_and_only_a_mark_is_kept(web):
     me = web["browser"](OWNER)
     sent = new_chat_with(me, attach("IMG_0042.jpg", PHOTO), "what is this?").json()
     assert web["inputs"][-1]["images"] == [("image/jpeg", PHOTO)] and web["inputs"][-1]["text"] == "what is this?"
     assert said(me, sent["conversation_id"]) == [("user", "📷 Photo (photos aren't saved) what is this?", "web"),
                                                  ("assistant", "reply to what is this?", "web")]
-    assert waiting_files() == []  # deleted once the answer was saved
+    assert len(waiting_files()) == 1  # kept 10 minutes for follow-up questions, encrypted
 
 
-def test_a_pdf_is_read_for_this_answer_only_and_routed_as_private(web):
+def test_a_pdf_is_read_for_the_answer_and_the_conversation_keeps_only_a_mark(web):
     me = web["browser"](OWNER)
     sent = new_chat_with(me, attach("invoice.pdf", tiny_pdf("Invoice total 42 dollars"), "application/pdf"),
                          "what's the total?").json()
@@ -309,8 +315,38 @@ def test_a_pdf_is_read_for_this_answer_only_and_routed_as_private(web):
     assert asked["private"] is True  # only models allowed to see private content, as for email
     shown = said(me, sent["conversation_id"])
     assert shown[0] == ("user", "📄 PDF (not saved) invoice.pdf · what's the total?", "web")
-    send(me, sent["conversation_id"], "and the date?")  # a follow-up: the model sees the mark, not the PDF's text
-    assert web["seen"][-1]["history"][0] == "[sent a PDF] invoice.pdf · what's the total?" and waiting_files() == []
+    with db.connect() as conn:
+        boxes = [r[0] for r in conn.execute("SELECT text_encrypted FROM chat_messages")]
+    assert not any("Invoice total" in memory._open(b) for b in boxes[:-1])  # only the model's own reply may quote it
+
+
+def test_for_10_minutes_follow_up_questions_get_the_file_again(web):
+    me = web["browser"](OWNER)
+    pdf = new_chat_with(me, attach("invoice.pdf", tiny_pdf("Invoice total 42 dollars"), "application/pdf"),
+                        "what's the total?").json()["conversation_id"]
+    photo = new_chat_with(me, attach("IMG_1.jpg", PHOTO), "what is it?", request_id="request-0102").json()
+    minutes_pass(9)
+    send(me, pdf, "and the date?", "request-0201")
+    assert "Invoice total 42 dollars" in web["inputs"][-1]["text"] and web["inputs"][-1]["private"] is True
+    assert "sent earlier in this conversation" in web["inputs"][-1]["text"]
+    send(me, photo["conversation_id"], "what colour is it?", "request-0202")
+    assert web["inputs"][-1]["images"] == [("image/jpeg", PHOTO)]
+    assert said(me, pdf)[-2] == ("user", "and the date?", "web")  # a follow-up is saved as just the words
+    send(me, telegram_conversation(OWNER), "unrelated", "request-0203")  # another conversation: no file
+    assert web["inputs"][-1] == {"text": "unrelated", "images": [], "private": False}
+    assert uploads.latest(DAD, pdf) is None  # nor another account, even given the conversation's id
+
+
+def test_after_10_minutes_the_file_is_gone_and_the_page_says_until_when(web):
+    me = web["browser"](OWNER)
+    sent = new_chat_with(me, attach("IMG_1.jpg", PHOTO), "what is it?").json()
+    shown = me.get(f"/api/conversations/{sent['conversation_id']}").json()["recent_file"]
+    assert shown["type"] == "image/jpeg" and shown["name"] == "IMG_1.jpg" and shown["until"].endswith("Z")
+    minutes_pass(11)
+    assert me.get(f"/api/conversations/{sent['conversation_id']}").json()["recent_file"] is None
+    send(me, sent["conversation_id"], "what else is in it?", "request-0201")
+    assert web["inputs"][-1]["images"] == []  # the model is told it no longer has it (system prompt)
+    assert uploads.sweep() == 1 and waiting_files() == []
 
 
 def test_a_file_alone_starts_a_chat_named_after_it(web):
@@ -345,10 +381,13 @@ def test_unreadable_pdfs_get_an_honest_reply_without_asking_the_model(web):
     empty = new_chat_with(me, attach("scan.pdf", tiny_pdf(""), "application/pdf"), request_id="request-0102").json()
     assert "couldn't read that PDF" in said(me, broken["conversation_id"])[-1][1]
     assert "couldn't find any text" in said(me, empty["conversation_id"])[-1][1]
-    assert web["inputs"] == [] and waiting_files() == []
+    assert web["inputs"] == []
+    send(me, broken["conversation_id"], "never mind, hello", "request-0201")  # a follow-up isn't stuck on it
+    assert web["inputs"][-1]["text"] == "never mind, hello" and said(me, broken["conversation_id"])[-1][1] == (
+        "reply to never mind, hello")
 
 
-def test_a_waiting_file_is_encrypted_survives_a_crash_and_is_deleted_after_the_answer(web, monkeypatch):
+def test_a_waiting_file_is_encrypted_survives_a_crash_and_isnt_swept_while_its_message_waits(web, monkeypatch):
     monkeypatch.setattr(main.app.state, "workers", NoThreads(), raising=False)
     me = web["browser"](OWNER)
     sent = new_chat_with(me, attach("IMG_1.jpg", PHOTO), "read this").json()
@@ -365,11 +404,13 @@ def test_a_waiting_file_is_encrypted_survives_a_crash_and_is_deleted_after_the_a
         return real(*args, **kwargs)
     monkeypatch.setattr(main, "run_agent", dies_once)
     work()
-    assert waiting_files() == [held]  # the retry still needs it
+    minutes_pass(30)  # e.g. the server was down a while: still needed by the retry, so not swept
+    assert uploads.sweep() == 0 and waiting_files() == [held]
     with db.connect() as conn:
         conn.execute("UPDATE jobs SET lease_until = datetime('now', '-1 second')")
     work()
-    assert web["inputs"][-1]["images"] == [("image/jpeg", PHOTO)] and waiting_files() == []
+    assert web["inputs"][-1]["images"] == [("image/jpeg", PHOTO)]
+    assert uploads.sweep() == 1 and waiting_files() == []  # answered and over 10 minutes old: gone
 
 
 def test_sending_a_file_twice_stores_it_once(web, monkeypatch):
@@ -411,10 +452,10 @@ def test_a_file_whose_message_was_given_up_on_or_not_answered_is_deleted_too(web
     assert waiting_files() == []
 
 
-def test_uploads_left_behind_are_swept_after_a_day_and_tokens_are_never_paths(web):
-    old, new = uploads.keep(b"old"), uploads.keep(b"new")
-    day_ago = time.time() - 25 * 3600
-    os.utime(uploads.DIR / old, (day_ago, day_ago))
+def test_files_are_swept_after_10_minutes_and_tokens_are_never_paths(web):
+    old = uploads.keep(b"old", OWNER, 1, "image/jpeg", "a.jpg")
+    minutes_pass(11)
+    new = uploads.keep(b"new", OWNER, 1, "image/jpeg", "b.jpg")
     assert uploads.sweep() == 1 and uploads.read(old) is None and uploads.read(new) == b"new"
     victim = uploads.DIR.parent / "victim.txt"
     victim.write_text("keep me")
@@ -427,6 +468,17 @@ def test_the_daily_limit_covers_photos_too(web, monkeypatch):
     dad = web["browser"](DAD)
     sent = new_chat_with(dad, attach("IMG_1.jpg", PHOTO), "what is it?").json()
     assert said(dad, sent["conversation_id"])[-1][1] == main.LIMIT_REPLY and web["inputs"] == []
+
+
+def test_deleting_everything_or_removing_a_member_deletes_their_files_at_once(web, monkeypatch):
+    monkeypatch.setattr(account.google_web, "disconnect", lambda account_id: True)
+    me, dad = web["browser"](OWNER), web["browser"](DAD)
+    new_chat_with(me, attach("IMG_1.jpg", PHOTO))
+    new_chat_with(dad, attach("IMG_2.jpg", PHOTO), request_id="request-0102")
+    assert len(waiting_files()) == 2
+    account.remove_member(DAD)
+    assert len(waiting_files()) == 1
+    account.delete_everything(OWNER)
     assert waiting_files() == []
 
 

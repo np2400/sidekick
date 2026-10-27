@@ -24,6 +24,7 @@ export type Transcript = {
   id: number; title: string; origin: "telegram" | "web"; messages: Message[];
   waiting: Waiting[];          // sent, still being answered
   proposal: Proposal | null;   // a change waiting for your yes or no
+  recent_file: (Attached & { until: string }) | null;  // a photo or PDF more questions can still use
 };
 export type Sent = { conversation_id: number; job_id: number };
 export type JobStatus = { status: "waiting" | "done" | "failed" };
