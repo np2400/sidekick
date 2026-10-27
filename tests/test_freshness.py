@@ -1,5 +1,6 @@
 """Web results honest about time (app/freshness.py) and the evals that replay Oct 26's stale event. Offline."""
-from datetime import date
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -77,3 +78,51 @@ def test_a_reply_may_name_the_old_event_only_while_saying_it_has_passed():
     assert mentions_only_with({"final_reply": "Try the free movie night at the Great Park."}, rule)[0]
     assert mentions_only_with({"final_reply": "Night of the Living Shred already happened on Oct 17."}, rule)[0]
     assert not mentions_only_with({"final_reply": "Night of the Living Shred is this Saturday!"}, rule)[0]
+
+
+# --- A reply's weekdays must match their dates (freshness.weekday_slips, checked in the agent loop) ------------------
+
+OCT_27 = date(2026, 10, 27)  # a Tuesday
+
+
+@pytest.mark.parametrize("reply, slips", [
+    ("another free event for Saturday October 28 2026", ["October 28, 2026 is a Wednesday, not a Saturday"]),  # Oct 27
+    ("Nome, AK today (Fri 7 Nov): high 28°F", ["November 7, 2026 is a Saturday, not a Friday"]),  # Qwen, Oct 26
+    ("on Saturday October 31 2026 at 6:30 p.m.", []),
+    ("Sat, Oct. 31 and Sun 1 November 2026", []),
+    ("Tuesday, January 28, 2020 at 7:30 PM", []),  # an old ticket: right for its year
+    ("Tuesday January 28", []),                     # no year and months away: which year is meant isn't sure
+    ("2026-10-28 and October 28", []),              # no weekday named: nothing to check
+])
+def test_a_weekday_that_doesnt_match_its_date_is_caught(reply, slips):
+    assert freshness.weekday_slips(reply, OCT_27) == slips
+
+
+def wrong_weekday_for_tomorrow() -> tuple[str, str]:
+    """A reply naming tomorrow with the wrong weekday, and the right one (the agent checks against the real today)."""
+    tomorrow = datetime.now(ZoneInfo("America/Los_Angeles")).date() + timedelta(days=1)
+    wrong = (tomorrow + timedelta(days=1)).strftime("%A")
+    day = f"{tomorrow:%B} {tomorrow.day} {tomorrow.year}"
+    return f"The fair is on {wrong} {day}.", f"The fair is on {tomorrow:%A} {day}."
+
+
+def test_a_wrong_weekday_is_sent_back_once_and_the_fixed_answer_is_used():
+    slipped, fixed = wrong_weekday_for_tomorrow()
+    llm = ScriptedProvider([text(slipped)], [text(fixed)])
+    result = run_agent("when is the fair?", ToolContext(chat_id=1, tz="America/Los_Angeles"), llm=llm, tools={})
+    assert result.reply == fixed and result.trace.corrections == ["weekday:1"]
+    assert "doesn't match its date" in llm.received[1][-1].text and "not a" in llm.received[1][-1].text
+
+
+def test_still_wrong_after_that_the_correction_is_added_instead_of_asking_forever():
+    slipped, _ = wrong_weekday_for_tomorrow()
+    llm = ScriptedProvider([text(slipped)], [text(slipped)])
+    result = run_agent("when is the fair?", ToolContext(chat_id=1, tz="America/Los_Angeles"), llm=llm, tools={})
+    assert result.reply.startswith(slipped) and "(Date check: " in result.reply and len(llm.received) == 2
+
+
+def test_a_reply_with_right_weekdays_costs_no_extra_call():
+    _, fixed = wrong_weekday_for_tomorrow()
+    llm = ScriptedProvider([text(fixed)])
+    result = run_agent("when is the fair?", ToolContext(chat_id=1, tz="America/Los_Angeles"), llm=llm, tools={})
+    assert result.reply == fixed and result.trace.corrections == [] and len(llm.received) == 1

@@ -55,6 +55,34 @@ def mentioned_dates(text: str, today: date, limit: int = MAX_PER_RESULT) -> list
     return [label for _, label in sorted(found)][:limit]
 
 
+def weekday_slips(text: str, today: date, near_days: int = 60) -> list[str]:
+    """Dates in a reply whose weekday is wrong, as corrections: "October 28, 2026 is a Wednesday, not a Saturday".
+    On Oct 27 a reply said "Saturday October 28 2026" and, a sentence later, "Saturday October 31". Only dates that
+    name a weekday are checked: with a year, always; without one, only within `near_days` of today, where the
+    nearest year is surely the one meant ("Tuesday, January 28" about a 2020 ticket is left alone)."""
+    slips = []
+    for pattern in PATTERNS:
+        for match in pattern.finditer(text or ""):
+            weekday, year = (match.groupdict().get("weekday") or "").lower(), match.group("year")
+            if not weekday:
+                continue
+            try:
+                when = date(int(year or today.year), _month(match.group("month")), int(match.group("day")))
+                if not year:
+                    when = min((when.replace(year=y) for y in (today.year - 1, today.year, today.year + 1)),
+                               key=lambda d: abs((d - today).days))
+            except (TypeError, ValueError):
+                continue
+            if not year and abs((when - today).days) > near_days:
+                continue
+            said = FULL_WEEKDAYS[WEEKDAYS.index(weekday)]
+            if WEEKDAYS.index(weekday) != when.weekday():
+                slip = f"{when.strftime('%B')} {when.day}, {when.year} is a {when.strftime('%A')}, not a {said}"
+                if slip not in slips:
+                    slips.append(slip)
+    return slips
+
+
 def clean_url(url: str) -> str:
     """Drop tracking codes (utm_*, srsltid...) so links are shorter and point to the page itself."""
     parts = urlsplit(url)

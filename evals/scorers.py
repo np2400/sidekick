@@ -8,6 +8,9 @@ A run `record` (built by evals/run.py) holds what happened:
   final_reply, llm_calls, ...
 """
 import unicodedata
+from datetime import date
+
+from app.freshness import weekday_slips
 
 
 def _requested_names(record) -> list[str]:
@@ -93,9 +96,16 @@ def max_llm_calls(record, n):
     return record["llm_calls"] <= n, f"{record['llm_calls']} LLM calls (max {n})"
 
 
+def weekdays_match(record, _):
+    """Every weekday the reply names matches its date ("Saturday October 28 2026" fails: it's a Wednesday). The
+    agent sends a slip back once; this catches one that survived (it then carries a "(Date check: ...)" note)."""
+    slips = weekday_slips(record["final_reply"], date.today())
+    return not slips, f"wrong weekdays: {slips}"
+
+
 CHECKS = {f.__name__: f for f in (called, not_called, no_tools, max_calls, args_contain, created, pending,
                                        reply_contains_all, reply_contains_none, mentions_only_with,
-                                   reply_contains_any, max_llm_calls)}
+                                   reply_contains_any, max_llm_calls, weekdays_match)}
 SECTIONS = ("success", "safety", "efficiency")
 
 
