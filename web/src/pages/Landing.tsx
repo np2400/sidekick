@@ -3,83 +3,90 @@ import { ButtonLink, Logo } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
 import { PRIVACY_URL } from "../layouts/PublicLayout";
 
-/** Shown in place of private details (people, places, dates, booking numbers) in real conversations. */
-const R = ({ w = "4em" }: { w?: string }) => (
-  <span className="redact" style={{ width: w }} role="img" aria-label="redacted" />
-);
-
-type Turn = { from: "you" | "sidekick"; content: ReactNode; photo?: boolean; steps?: { icon: IconName; label: string }[] };
+type Turn = { from: "you" | "sidekick" | "note"; content?: ReactNode; photo?: string; steps?: { icon: IconName; label: string }[] };
 type Example = { id: string; tab: string; icon: IconName; source: string; turns: Turn[] };
 
+const BASE = import.meta.env.BASE_URL;  // "/app/" in the build: the page's own files live there
+
 /**
- * Real conversations with Sidekick on Telegram, copied word for word from screenshots. Nothing is written for the
- * page: the only changes are redactions of private details. Steps under a reply are what that reply actually used.
+ * Real use of Sidekick, copied from the conversations: nothing is written for the page. Long replies are condensed,
+ * and "…" marks every place something was left out; nothing is added. Steps under a reply are what it actually
+ * used (checked in its trace). Shown only with nothing private in them.
  */
 const EXAMPLES: Example[] = [
   {
-    id: "web", tab: "Web search", icon: "globe", source: "Telegram · Oct 24, 2026",
+    id: "photo", tab: "Photos", icon: "image",
+    source: "Sidekick Web · Oct 27, 2026 · condensed (…)",
     turns: [
-      { from: "you", content: "Whats the weather in Seattle tomorrow" },
-      { from: "sidekick", steps: [{ icon: "globe", label: "Searched the web" }],
-        content: "Tomorrow (Sunday, Oct 25) in Seattle is expected to be cloudy, breezy, and chilly, with highs in the low 50s and a chance of rain according to local forecasts (FOX 13 / KOMO News)." },
-      { from: "you", content: "And the day after" },
-      { from: "sidekick", steps: [{ icon: "history", label: "Remembered the city" }, { icon: "globe", label: "Searched the web" }],
-        content: "On Monday (Oct 26), Seattle is expected to stay rainy and cloudy with gusty winds and high temperatures in the low-to-mid 50s as an active Pacific storm system continues through the region (according to local weather reports and AccuWeather)." },
-    ],
-  },
-  {
-    id: "photo", tab: "Photos", icon: "image", source: "Telegram · Oct 24, 2026",
-    turns: [
-      { from: "you", photo: true, content: "" },
-      { from: "sidekick", steps: [{ icon: "image", label: "Read the photo" }],
-        content: "The photo shows an AirPods charging case inside a protective black and bright orange case with a metal keychain ring attached. It is resting on a piece of gray fabric. There are no dates, times, or events in this photo." },
-      { from: "you", content: "What is this" },
-      { from: "sidekick", steps: [{ icon: "history", label: "Answered from memory" }],
-        content: "It's an Apple AirPods charging case that's been placed inside a black-and-orange protective case with a metal key-chain ring attached, sitting on a gray fabric surface." },
-    ],
-  },
-  {
-    id: "email", tab: "Email & bookings", icon: "mail", source: "Telegram · Oct 25, 2026 · private details redacted",
-    turns: [
-      { from: "you", content: <>What hotels do I have booked for December trip including <R w="5em" /> and others</> },
-      { from: "sidekick", steps: [{ icon: "mail", label: "Searched Gmail" }],
+      { from: "you", photo: `${BASE}examples/battery-estimate.png`, content: "How much does it cost normally for above?" },
+      { from: "sidekick", steps: [{ icon: "image", label: "Read the photo" }, { icon: "globe", label: "Searched the web" }],
+        content: "An estimate of $800 to $830 for a 12V battery replacement and charging system check is unusually " +
+                 "high. … Unless your car is a high-end luxury model requiring an expensive OEM battery and complex " +
+                 "labor, $800+ is significantly overpriced." },
+      { from: "you", content: "Can you look up what this battery replacement usually costs for my exact car model 2020 mercedes e350 sedan" },
+      { from: "sidekick", steps: [{ icon: "image", label: "Looked at the photo again" }, { icon: "globe", label: "Searched the web" }],
         content: (
           <>
-            Here are the hotel bookings found for your December trip:
-            <ol className="ex-list">
-              <li><R w="6em" /> (<R w="4em" />)<br />Check-in: Dec <R w="1.4em" />, 2026 | Check-out: Dec <R w="1.4em" />, 2026<br />Status: Corporate booking requested via <R w="3em" /></li>
-              <li><R w="9em" /><br />Check-in: Dec <R w="1.4em" />, 2026 | Check-out: Dec <R w="1.4em" />, 2026<br />Reservation #: <R w="7em" /></li>
-              <li><R w="6em" /> Segment (Dec <R w="1.4em" /> – Dec <R w="1.4em" />, 2026)<br />No hotel booking confirmations were found in your email or calendar for these dates.</li>
-            </ol>
-            <span className="ex-more">… and 2 more bookings</span>
+            For a 2020 Mercedes-Benz E350 sedan, a 12V main battery replacement typically costs:
+            <ul className="ex-list">
+              <li>Independent European Auto Shop: $350 to $500 total</li>
+              <li>Mercedes-Benz Dealership: $450 to $650 total</li>
+            </ul>
+            … The E350 requires an AGM (Absorbent Glass Mat) battery … Modern Mercedes models require system
+            registration/coding with a scan tool so the charging system recognizes the new battery. …
+            Recommendation: An independent German auto specialist will install the correct AGM battery and perform the
+            required battery registration for around $350 to $500.
           </>
         ) },
+    ],
+  },
+  {
+    id: "web", tab: "Web search", icon: "globe", source: "Sidekick Web · Oct 27, 2026",
+    turns: [
+      { from: "note", content: "Continuing a conversation about the Seattle Mariners that started in Telegram" },
+      { from: "you", content: "When is their next game ?" },
+      { from: "sidekick", steps: [{ icon: "history", label: "Remembered the team" }, { icon: "globe", label: "Searched the web" },
+                                  { icon: "external", label: "Read a page" }],
+        content: "The Mariners' 2026 season is over\u2014they finished 76-86 and missed the postseason, so they don't " +
+                 "have any upcoming games right now." },
+    ],
+  },
+  {
+    id: "calendar", tab: "Calendar", icon: "calendar",
+    source: "Sidekick Web · Oct 26, 2026",
+    turns: [
+      { from: "you", content: "add sidekick web test to my calendar tomorrow at 3pm" },
+      { from: "sidekick", steps: [{ icon: "calendar", label: "Proposed an event: nothing created yet" }],
+        content: "I'll add a calendar event titled \u201csidekick web test\u201d for tomorrow, October 27, from 3pm to " +
+                 "4pm PT. Should I go ahead? Reply \u201cyes\u201d to confirm or \u201cno\u201d to cancel." },
+      { from: "you", content: "✅ Yes" },
+      { from: "sidekick", steps: [{ icon: "calendar", label: "Added to Google Calendar" }],
+        content: "✅ Added to calendar: sidekick web test (Tue Oct 27, 03:00 PM)" },
     ],
   },
 ];
 
 const CAPABILITIES: { icon: IconName; title: string; body: string }[] = [
-  { icon: "globe", title: "Searches the web", body: "Current answers with the source named." },
-  { icon: "file", title: "Reads photos and documents", body: "Flyers, signs, PDFs and itineraries." },
-  { icon: "plug", title: "Works with your apps", body: "Gmail (read-only) and Google Calendar." },
-  { icon: "bell", title: "Takes real actions", body: "Reminders, tasks and events, with your OK." },
+  { icon: "image", title: "Reads photos and documents", body: "Estimates, receipts, tickets and PDFs." },
+  { icon: "calendar", title: "Takes real actions", body: "Reminders, tasks and calendar events, with your OK." },
+  { icon: "bell", title: "Notifies your phone", body: "Add it to your home screen; reminders arrive with the app closed." },
+  { icon: "globe", title: "Searches the web", body: "Current prices, news and events." },
+  { icon: "plug", title: "Works with your apps", body: "Google Calendar, and Gmail read-only." },
+  { icon: "history", title: "Keeps the conversation", body: "Continue a chat from Telegram on the web, or back." },
 ];
 
 function Conversation({ example }: { example: Example }) {
   return (
     <div className="ex-thread">
-      {example.turns.map((t, i) => (
+      {example.turns.map((t, i) => t.from === "note" ? <p key={i} className="ex-context">{t.content}</p> : (
         <div key={i} className={`ex-turn ${t.from}`}>
           {t.from === "sidekick" && t.steps && (
             <div className="ex-steps">
               {t.steps.map((s) => <span key={s.label} className="ex-step"><Icon name={s.icon} size={13} />{s.label}</span>)}
             </div>
           )}
-          {t.photo ? (
-            <div className="ex-photo"><Icon name="image" size={18} /><span>Photo</span></div>
-          ) : (
-            <div className="ex-bubble">{t.content}</div>
-          )}
+          {t.photo && <img className="ex-photo-img" src={t.photo} alt="The photo that was sent" />}
+          {t.content && <div className="ex-bubble">{t.content}</div>}
         </div>
       ))}
     </div>
@@ -87,7 +94,9 @@ function Conversation({ example }: { example: Example }) {
 }
 
 function Showcase() {
-  const [active, setActive] = useState(EXAMPLES[0].id);
+  // A link can open a given example, e.g. /#example-calendar
+  const linked = EXAMPLES.find((e) => window.location.hash === `#example-${e.id}`);
+  const [active, setActive] = useState(linked?.id ?? EXAMPLES[0].id);
   const example = EXAMPLES.find((e) => e.id === active)!;
   return (
     <div className="showcase">
@@ -117,17 +126,18 @@ export default function Landing() {
       <section className="hero" id="examples">
         <div className="container hero-inner">
           <div className="hero-copy">
-            <span className="eyebrow"><Icon name="sparkles" size={14} /> Your personal AI agent</span>
+            <span className="eyebrow"><Icon name="sparkles" size={14} /> Invite-only beta</span>
             <h1>Your personal AI agent that goes beyond answers.</h1>
             <p className="lead">
-              Sidekick searches the web, reads your photos and documents, works with your Gmail and Calendar, and gets
-              things done: reminders, tasks and events, always with your OK before it changes anything that isn't its own.
+              Sidekick reads your photos and documents, searches the web, works with your Google Calendar and Gmail,
+              and gets things done: reminders on your phone, tasks and events, always with your OK before it changes
+              anything that isn't its own.
             </p>
             <div className="hero-actions">
               <ButtonLink to="/app/signin" size="lg">Sign in</ButtonLink>
-              <ButtonLink to="/app/chat" variant="secondary" size="lg">Open the preview</ButtonLink>
+              <ButtonLink to="/app" variant="secondary" size="lg">Open Sidekick</ButtonLink>
             </div>
-            <p className="muted small">Available today on Telegram (invite-only). The web app is in preview.</p>
+            <p className="muted small">An invite-only beta: chat in Telegram or on the web, with reminders on your phone.</p>
           </div>
           <Showcase />
         </div>
@@ -149,7 +159,7 @@ export default function Landing() {
               <h2>Real actions, on your terms</h2>
               <p className="muted">
                 Anything Sidekick would add to your calendar or task list waits for a tap. Your own reminders arrive
-                with buttons, and every new one can be undone.
+                on your phone and in Telegram, with buttons, and every new one can be undone.
               </p>
             </div>
             <div className="actions-ui" aria-label="Product UI">
@@ -179,8 +189,9 @@ export default function Landing() {
         <div className="container privacy-inner">
           <Icon name="shield" size={20} />
           <p>
-            <strong>Private by design.</strong> Gmail access is read-only, Google sign-ins are stored encrypted, logs
-            never contain what you write, and you can export or delete your data anytime.
+            <strong>Private by design.</strong> Gmail access is read-only, Google sign-ins and your conversations are
+            stored encrypted, photos and PDFs are deleted after 10 minutes, logs never contain what you write, and you
+            can export or delete your data anytime.
           </p>
           <a className="text-link" href={PRIVACY_URL} target="_blank" rel="noreferrer">
             Privacy policy <Icon name="external" size={14} />
@@ -190,9 +201,12 @@ export default function Landing() {
 
       <section className="section cta">
         <div className="container cta-inner">
-          <h2>Try the preview</h2>
-          <p className="muted">Web sign-in and chat are coming next. Sidekick works on Telegram today.</p>
-          <ButtonLink to="/app/chat" size="lg">Open the preview</ButtonLink>
+          <h2>Invite-only beta</h2>
+          <p className="muted">
+            Sidekick isn't open for sign-ups yet. Invited? Sign in with the Google account you linked: send /web to
+            Sidekick in Telegram to link one.
+          </p>
+          <ButtonLink to="/app/signin" size="lg">Sign in</ButtonLink>
         </div>
       </section>
     </main>

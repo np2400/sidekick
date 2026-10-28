@@ -174,6 +174,19 @@ def test_a_version_that_never_answers_fails_after_the_wait():
     assert server.check() is False and HEALTH in server.asked and DEEP not in server.asked
 
 
+def test_the_home_page_is_the_landing_page_and_googles_required_pages_stay():
+    """Google's sign-in needs a home page and a privacy policy on the domain; sign-in and the app keep their routes."""
+    caddy = (REPO / "caddy" / "Caddyfile").read_text()
+    home = caddy.split("handle / {", 1)[1].split("}", 1)[0]
+    assert "root * /web/dist" in home and "rewrite * /index.html" in home
+    for route in ("handle /privacy {", "handle /auth/* {", "handle /oauth/google/callback {", "handle /api/* {",
+                  "handle_path /app/* {", "handle /telegram/webhook {", "handle /link {"):
+        assert route in caddy, route
+    landing = (REPO / "web" / "src" / "pages" / "Landing.tsx").read_text()
+    layout = (REPO / "web" / "src" / "layouts" / "PublicLayout.tsx").read_text()
+    assert "PRIVACY_URL" in landing and "https://github.com/np2400/sidekick" in layout  # as the old home page had
+
+
 def test_the_deep_check_is_only_reachable_from_the_server_itself():
     caddy = (REPO / "caddy" / "Caddyfile").read_text()
     assert "handle /health {" in caddy and "/health*" not in caddy and "/health/" not in caddy

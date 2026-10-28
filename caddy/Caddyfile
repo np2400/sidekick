@@ -35,9 +35,10 @@
 		try_files {path} /index.html
 		file_server
 	}
-	# Two static pages (site/), required by Google's sign-in screen: a home page and a privacy policy.
+	# Google's sign-in screen requires a home page and a privacy policy on this domain. The home page is the web app's
+	# landing page (it links the policy). To go back to the plain page in site/, use: root * /srv (site/index.html).
 	handle / {
-		root * /srv
+		root * /web/dist
 		rewrite * /index.html
 		file_server
 	}
