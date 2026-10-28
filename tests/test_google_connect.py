@@ -160,7 +160,7 @@ def test_a_connected_members_brief_reads_their_own_calendar(google, monkeypatch)
     monkeypatch.setattr(brief, "list_events", lambda start, end, ctx: seen.append(ctx) or {"events": []})
     monkeypatch.setattr(brief, "unread_digest", lambda *a, **k: pytest.fail("a member's brief read Gmail"))
     dad = ToolContext(chat_id=DAD, user_id="222", role="member", calendar=True)
-    assert "events" in brief.gather(ctx=dad) and seen == [dad]
+    assert "events" in brief.gather(ctx=dad) and seen == [dad, dad]  # today, and the next few days
 
 
 # --- Keeping access working, and giving it back ------------------------------------

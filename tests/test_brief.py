@@ -40,9 +40,18 @@ def test_the_digest_sorts_unread_mail_names_people_and_counts_everything(monkeyp
                                                              "Subject": "FDE at Deloitte"}},
     }
 
+    inbox["e1"] = {"labelIds": ["CATEGORY_UPDATES"], "headers": {"From": "United <notifications@united.com>",
+                                                                 "Subject": "Check in for Friday's flight"}}
+    inbox["d1"] = {"labelIds": ["CATEGORY_UPDATES"], "headers": {"From": "Amazon <shipment-tracking@amazon.com>",
+                                                                 "Subject": "Your package arrives today"}}
+    queries = []
+
     def fake_request(method, url, service, ctx=None, params=None, **kwargs):
         if url == gmail.API:
-            return {"messages": [{"id": i} for i in inbox], "resultSizeEstimate": 41}
+            queries.append(params["q"])
+            if params["q"] == gmail.ESSENTIALS:  # the week's essentials: one older, one also among today's unread
+                return {"messages": [{"id": "e1"}, {"id": "d1"}], "resultSizeEstimate": 2}
+            return {"messages": [{"id": "p1"}, {"id": "a1"}, {"id": "d1"}], "resultSizeEstimate": 41}
         mid = url.rsplit("/", 1)[1]
         return {"id": mid, "snippet": "…", "labelIds": inbox[mid]["labelIds"],
                 "payload": {"headers": [{"name": k, "value": v} for k, v in inbox[mid]["headers"].items()]}}
@@ -51,7 +60,11 @@ def test_the_digest_sorts_unread_mail_names_people_and_counts_everything(monkeyp
     digest = gmail.unread_digest()
     assert digest["total"] == 41  # Gmail's count of all of it, not just the 30 looked at
     assert [(e["from"], e["subject"]) for e in digest["people"]] == [("Maya Lee", "Dinner Friday?")]  # no address
+    assert queries[0].startswith("is:unread newer_than:2d") and "-category:promotions" in queries[0]  # 2 days, no deals
     assert [(e["from"], e["category"]) for e in digest["automated"]] == [("LinkedIn", "updates")]
+    assert [e["subject"] for e in digest["essentials"]] == ["Check in for Friday's flight", "Your package arrives today"]
+    assert "id" not in digest["essentials"][0] and "newer_than:7d" in queries[1]  # read or not, the last week
+    # each email in one list only: today's delivery is an essential, not also general automated mail
 
 
 # --- Grouped, filtered by the person's choices --------------------------------------------------------------------
@@ -74,7 +87,7 @@ def test_automated_mail_is_grouped_by_sender_and_left_out_categories_are_only_co
     linkedin, nextdoor = facts["automated_groups"]
     assert linkedin["count"] == 3 and linkedin["subjects"] == ["FDE at Deloitte", "FDE at Quadric"]  # one item
     assert nextdoor["from"] == "Nextdoor"
-    assert facts["left_out_by_choice"] == {"promotions": 2} and facts["total_unread"] == 9
+    assert "left_out_by_choice" not in facts and "total_unread" not in facts  # a count isn't useful in a brief
 
     everything = brief.email_facts(digest, hidden=[])
     assert {g["from"] for g in everything["automated_groups"]} == {"LinkedIn Job Alerts", "UNIQLO", "Chipotle",
@@ -103,9 +116,12 @@ def test_preferences_are_per_person_encrypted_and_default_to_leaving_out_deals()
 
 def test_the_brief_gets_this_persons_priorities_and_its_own_short_instructions(monkeypatch):
     settings.set_brief_preferences(OWNER, "Travel and family", [])
-    monkeypatch.setattr(brief, "list_events", lambda start, end, ctx: {"count": 0, "events": []})
+    asked = []
+    monkeypatch.setattr(brief, "list_events", lambda start, end, ctx: asked.append((start, end)) or
+                        {"count": 0, "events": []})
     monkeypatch.setattr(brief, "unread_digest", lambda ctx: {"total": 3, "people": [], "automated": [
-        automated("United", "updates", "Your flight to Mumbai has a new gate")]})
+        automated("United", "updates", "Your flight to Mumbai has a new gate")], "essentials": [
+        {"from": "PG&E", "subject": "Your bill of $84 is due Friday", "date": "Mon …, 2 days ago", "snippet": ""}]})
     llm = ScriptedProvider([text("Today: Nothing on your calendar.\nFor you: United changed your gate.")])
 
     out = brief.build_brief(ctx=ToolContext(chat_id=OWNER), llm=llm)
@@ -114,8 +130,29 @@ def test_the_brief_gets_this_persons_priorities_and_its_own_short_instructions(m
     facts = json.loads(prompt[len(brief.BRIEF_PROMPT):])
     assert facts["what_matters_to_user"] == "Travel and family"
     assert facts["email"]["automated_groups"][0]["from"] == "United"
-    assert "Nothing from automated_groups ever goes here." in prompt and "at most 2 items" in prompt
+    assert facts["email"]["essentials_this_week"][0]["subject"] == "Your bill of $84 is due Friday"
+    (today_start, today_end), (ahead_start, ahead_end) = asked  # today, then the next 3 days for "Coming up"
+    assert today_start[:10] == today_end[:10] and "upcoming_events" in facts
+    from datetime import date
+    assert (date.fromisoformat(ahead_end[:10]) - date.fromisoformat(today_start[:10])).days == brief.LOOK_AHEAD_DAYS
+    assert "Nothing from automated email ever goes here." in prompt and "at most 2 items from automated_groups" in prompt
+    assert "Coming up:" in prompt and "Next step:" in prompt and "Inbox highlights: the 3 or 4 most useful" in prompt
+    assert "why it matters" in prompt
+    assert "unread emails" not in prompt
+    assert "never that it's unpaid" in prompt and "never invent events" in prompt  # owner's rules, Oct 28
     assert llm.sensitive_flags == [True]  # email previews: only models allowed to see private content
+
+
+def test_highlights_draw_on_all_recent_non_promotional_mail_with_or_without_anything_else(monkeypatch):
+    """Oct 28: hiding automated mail without "anything else" left nothing useful in the brief. Code drops deals;
+    the model picks up to 4 highlights from the rest and says why each matters."""
+    monkeypatch.setattr(brief, "list_events", lambda start, end, ctx: {"count": 0, "events": []})
+    monkeypatch.setattr(brief, "unread_digest", lambda ctx: {"total": 200, "people": [], "automated": [
+        automated("Apple", "updates", "Your receipt from Apple"), automated("Domino's", "promotions", "Free pizza")],
+        "essentials": [{"from": "Amazon", "subject": "Arriving today", "date": "today", "snippet": ""}]})
+    facts = brief.gather(ctx=ToolContext(chat_id=DAD))  # nothing else set
+    assert [g["from"] for g in facts["email"]["automated_groups"]] == ["Apple"]  # the receipt stays, the deal doesn't
+    assert facts["email"]["essentials_this_week"][0]["subject"] == "Arriving today"
 
 
 def test_the_latest_brief_is_kept_encrypted_for_the_web():
@@ -171,6 +208,8 @@ def test_each_person_sets_their_own_brief_time_priorities_and_categories(web):
     assert saved["brief"]["hidden"] == ["social", "promotions"] and "updates" in saved["brief"]["categories"]
     assert me.get("/api/settings").json()["brief"]["interests"] == ""  # Dad's words stay Dad's
 
+    keeps = dad.post("/api/settings/brief", json={"time": "8:00", "interests": "Temple events"}).json()["brief"]
+    assert keeps["hidden"] == ["social", "promotions"]  # the web form doesn't send categories: they stay as they were
     assert dad.post("/api/settings/brief", json={"time": "off", "interests": "", "hidden": []}).json()["brief_time"] is None
     assert dad.post("/api/settings/brief", json={"time": "25:00", "interests": ""}).status_code == 422
     assert dad.post("/api/settings/brief", json={"time": "8:00", "interests": "", "hidden": ["spam"]}).status_code == 422

@@ -302,16 +302,17 @@ def preferences(account_id: int = Depends(signed_in)) -> dict:
 class BriefChoice(BaseModel):
     time: str = Field(max_length=10)                      # "07:30", "7:30am" or "off"
     interests: str = Field(default="", max_length=2000)   # trimmed and checked in settings.set_brief_preferences
-    hidden: list[str] = Field(default_factory=list, max_length=10)
+    hidden: list[str] | None = Field(default=None, max_length=10)  # None: as before (deals left out by default)
 
 
 @router.post("/settings/brief", dependencies=[Depends(from_our_pages)])
 def brief_settings(choice: BriefChoice, account_id: int = Depends(signed_in)) -> dict:
-    """The morning brief: when (or off), what matters to this person, and which email categories to leave out."""
+    """The morning brief: when (or off), and what else matters to this person besides the everyday essentials."""
     if settings.parse_clock(choice.time) is None and choice.time.strip().lower() != "off":
         raise HTTPException(status_code=422, detail="Pick a time like 7:30, or turn the brief off.")
     try:
-        settings.set_brief_preferences(account_id, choice.interests, choice.hidden)
+        hidden = settings.brief_preferences(account_id)["hidden"] if choice.hidden is None else choice.hidden
+        settings.set_brief_preferences(account_id, choice.interests, hidden)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     settings.set_brief_time(account_id, choice.time)

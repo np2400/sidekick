@@ -385,15 +385,12 @@ code {
 /* Settings: the morning brief form */
 .brief-field { display: flex; flex-direction: column; gap: 6px; padding: 12px 20px; border: 0; margin: 0;
   border-top: 1px solid var(--border); }
-.brief-field legend { padding: 0; margin-bottom: 4px; float: left; width: 100%; }
 .text-input { width: 100%; padding: 9px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
   background: var(--surface); }
 textarea.text-input { resize: vertical; min-height: 76px; }
 input[type="time"].text-input { width: auto; min-width: 130px; }
 .text-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .counter { align-self: flex-end; }
-.check { display: flex; align-items: center; gap: 10px; padding: 4px 0; cursor: pointer; }
-.check input { width: 18px; height: 18px; accent-color: var(--accent); }
 .brief-save { display: flex; align-items: center; gap: 12px; padding: 12px 20px 16px; border-top: 1px solid var(--border); }
 
 /* ---------- Connected apps ---------- */

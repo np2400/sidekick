@@ -129,14 +129,22 @@ def email_kind(headers: dict, labels: list[str]) -> tuple[str, str]:
     return "person", ""
 
 
-def unread_digest(max_emails: int = 30, *, ctx=None) -> dict:
-    """The last day's unread mail for the brief, sorted in code: from people, or automated (with its category).
-    Headers and Gmail's preview only, never bodies. total: Gmail's estimate of all of it, beyond max_emails."""
-    data = google_request("GET", API, "Gmail", ctx,
-                          params={"q": "is:unread newer_than:1d -in:spam -in:chats", "maxResults": max_emails})
+# Everyday essentials each brief checks for, in the last week of mail, read or not: a flight on Friday or a bill due
+# this week usually arrived days ago. Subject lines only: a rewards promo that mentions delivery in its body isn't
+# a delivery (Oct 28, a real sample). Deals are left out.
+ESSENTIALS = ('newer_than:7d -in:spam -category:promotions subject:("out for delivery" OR delivery OR delivered OR '
+              'shipped OR arriving OR arrives OR "payment due" OR "bill is ready" OR "your bill" OR statement OR '
+              'autopay OR invoice OR flight OR "check in" OR "check-in" OR itinerary OR boarding OR reservation OR '
+              'appointment OR booking)')
+
+
+def _brief_emails(query: str, max_emails: int, ctx) -> dict:
+    """Matching mail for the brief, each sorted in code: from a person, or automated (with its category).
+    Headers and Gmail's preview only, never bodies."""
+    data = google_request("GET", API, "Gmail", ctx, params={"q": query, "maxResults": max_emails})
     if "error" in data:
         return data
-    people, automated = [], []
+    emails = []
     for ref in data.get("messages", []):
         msg = google_request("GET", f"{API}/{ref['id']}", "Gmail", ctx,
                              params=[("format", "metadata"), *(("metadataHeaders", h) for h in DIGEST_HEADERS)])
@@ -144,15 +152,33 @@ def unread_digest(max_emails: int = 30, *, ctx=None) -> dict:
             return msg
         h = _headers(msg)
         kind, category = email_kind(h, msg.get("labelIds", []))
-        email = {"from": sender_name(h.get("From", "")), "subject": h.get("Subject") or "(no subject)",
-                 "date": _local_date(h.get("Date", ""), ctx),
-                 "snippet": INVISIBLE.sub("", html.unescape(msg.get("snippet", ""))).strip()[:MAX_SNIPPET]}
-        if kind == "person":
-            people.append(email)
-        else:
-            automated.append({**email, "category": category})
-    return {"total": max(data.get("resultSizeEstimate", 0), len(people) + len(automated)),
-            "people": people, "automated": automated}
+        emails.append({"id": ref["id"], "kind": kind, "category": category,
+                       "from": sender_name(h.get("From", "")), "subject": h.get("Subject") or "(no subject)",
+                       "date": _local_date(h.get("Date", ""), ctx),
+                       "snippet": INVISIBLE.sub("", html.unescape(msg.get("snippet", ""))).strip()[:MAX_SNIPPET]})
+    return {"total": data.get("resultSizeEstimate", 0), "emails": emails}
+
+
+def _plain(email: dict) -> dict:
+    return {k: v for k, v in email.items() if k not in ("id", "kind", "category")}
+
+
+def unread_digest(max_emails: int = 30, *, ctx=None) -> dict:
+    """The last 2 days' unread mail for the brief: from people, or other automated mail (with its category), and the
+    week's essentials (today's included), each email in one list only. total: Gmail's estimate of all unread."""
+    # Deals are never used, so they don't take any of the slots (Oct 28: half of the 30 were promotions).
+    unread = _brief_emails("is:unread newer_than:2d -in:spam -in:chats -category:promotions", max_emails, ctx)
+    if "error" in unread:
+        return unread
+    week = _brief_emails(ESSENTIALS, 10, ctx)
+    essentials = [] if "error" in week else week["emails"]
+    known = {e["id"] for e in essentials}
+    return {"total": max(unread["total"], len(unread["emails"])),
+            "people": [_plain(e) for e in unread["emails"] if e["kind"] == "person"],
+            "automated": [{**_plain(e), "category": e["category"]} for e in unread["emails"]
+                          if e["kind"] != "person" and e["id"] not in known],
+            "essentials": [_plain(e) for e in essentials if e["kind"] != "person" or e["id"] not in
+                           {u["id"] for u in unread["emails"]}]}
 
 
 def search_emails(query: str = "", day: str = "", direction: str = "any", max_results: int = MAX_RESULTS, *,

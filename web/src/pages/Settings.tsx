@@ -33,31 +33,28 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-const EXAMPLES = "e.g. Job hunting for engineering roles · family visits in December · orders for my bakery";
+const EXAMPLES = "e.g. Job hunting for engineering roles · my kids' school events · orders for my bakery";
 
-/** When the brief comes (or off), what matters to this person, and the kinds of automated email it may use. */
+/** When the brief comes (or off), and what else matters to this person. The everyday essentials are always on. */
 function BriefSettings({ initial }: { initial: Preferences }) {
   const [on, setOn] = useState(initial.brief_time !== null);
   const [time, setTime] = useState(initial.brief_time ?? "08:00");
   const [interests, setInterests] = useState(initial.brief.interests);
-  const [hidden, setHidden] = useState<string[]>(initial.brief.hidden);
   const [status, setStatus] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   async function save() {
     setSaving(true);
-    const result = await saveBriefSettings(on ? time : "off", interests, hidden);
+    const result = await saveBriefSettings(on ? time : "off", interests);
     setSaving(false);
     setStatus(result.state === "ready" ? "Saved. Your next brief uses it."
       : result.state === "unavailable" ? result.reason : "Sign in again, then save once more.");
   }
-  const toggle = (key: string, shown: boolean) =>
-    setHidden((now) => (shown ? now.filter((k) => k !== key) : [...now, key]));
 
   return (
     <div className="brief-settings" onChange={() => setStatus(null)}>
       <Row icon="sunrise" title="Morning brief"
-        body="Your day in a few lines: calendar, what needs you, and what matters to you."
+        body="Your day in a few lines: your calendar, tasks and reminders, what needs you, and the next 3 days. Each brief checks your email for appointments, travel, deliveries, bills and payments."
         control={<label className="switch"><input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} />
           <span aria-hidden="true" /><span className="sr-only">Send me a morning brief</span></label>} />
       {on && (
@@ -67,24 +64,11 @@ function BriefSettings({ initial }: { initial: Preferences }) {
         </label>
       )}
       <label className="brief-field">
-        <span className="setting-title">What matters to you</span>
-        <span className="muted small">Its "For you" picks at most two things that match. Leave it empty and it only
-          mentions something time-sensitive, like a delivery today or a bill due.</span>
+        <span className="setting-title">Anything else that matters to you (optional)</span>
         <textarea className="text-input" rows={3} maxLength={initial.brief.max_interests} placeholder={EXAMPLES}
           value={interests} onChange={(e) => setInterests(e.target.value)} />
         <span className="muted small counter">{interests.length}/{initial.brief.max_interests}</span>
       </label>
-      <fieldset className="brief-field">
-        <legend className="setting-title">Automated email it may use</legend>
-        <span className="muted small">Emails from people always count. These only feed "For you", never "Needs
-          attention".</span>
-        {Object.entries(initial.brief.categories).map(([key, label]) => (
-          <label key={key} className="check">
-            <input type="checkbox" checked={!hidden.includes(key)} onChange={(e) => toggle(key, e.target.checked)} />
-            {label}
-          </label>
-        ))}
-      </fieldset>
       <div className="brief-save">
         <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
         {status && <span className="muted small" role="status">{status}</span>}

@@ -184,9 +184,9 @@ export const conversationsChanged = () => window.dispatchEvent(new Event(CONVERS
 export const getBrief = () => get<{ latest: LatestBrief | null }>("brief");
 /** Build one now: a few seconds (email, then one AI call). At most once a minute. */
 export const makeBrief = () => post<{ latest: LatestBrief }>("brief");
-/** time: "07:30" or "off". */
-export const saveBriefSettings = (time: string, interests: string, hidden: string[]) =>
-  post<Preferences>("settings/brief", { time, interests, hidden });
+/** time: "07:30" or "off". interests: what else matters to them, besides the everyday essentials. */
+export const saveBriefSettings = (time: string, interests: string) =>
+  post<Preferences>("settings/brief", { time, interests });
 
 /** Sign out this browser. The server checks the request comes from Sidekick's own page (Origin). */
 export async function signOut(): Promise<void> {

@@ -543,6 +543,11 @@ several questions about a PDF without uploading it again. Its own milestone, wit
 - **W7:** Groq paid tier, or not.
 - **W7:** publish the Google consent screen.
 
+**Later improvements (noted, not planned yet):**
+- **Morning brief look-ahead beyond a week of email.** "Coming up" reads the next 3 days of the calendar and the last
+  7 days of email (Oct 28). A flight or appointment booked weeks ago, and not on the calendar, is missed. A later
+  step: find upcoming bookings and commitments in older email too.
+
 ## 18. Safeguards (added Oct 26, before W1)
 
 ### 18.1 W1: stable account ids without rewriting data
