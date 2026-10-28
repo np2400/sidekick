@@ -20,13 +20,17 @@ TICKET = {"id": "t1", "from": "Fly Example <noreply@fly.example>", "subject": "Y
     "Read again? Could you send that JAL ticket or confirmation email?",         # Qwen, Oct 27
     "Could you forward the ticket PDF?",
     "Shall I check that email?",
+    "Could you try searching your inbox with a more specific keyword (e.g., the provider's name) and let me know "
+    "the exact subject or forward the email?",                                   # gpt-oss, Oct 27
 ])
 def test_asking_the_user_to_open_or_send_their_email_is_caught(reply):
     assert asks_for_email(reply)
 
 
 @pytest.mark.parametrize("reply", ["Your booking number is FX12AB.", "I can't find a booking for December.",
-                                   "Would you like me to add it to your calendar?"])
+                                   "Would you like me to add it to your calendar?",
+                                   "I searched your inbox for 'openrouter' and found nothing from them.",
+                                   "I couldn't find it searching your inbox for 'receipt'."])
 def test_ordinary_answers_are_not(reply):
     assert not asks_for_email(reply)
 

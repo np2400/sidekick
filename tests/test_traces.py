@@ -1,4 +1,6 @@
 """Traces are saved in SQLite (they outlive Docker's log) and readable with python -m app.traces."""
+import json
+
 from fastapi.testclient import TestClient
 
 from app import main, traces
@@ -16,6 +18,18 @@ def test_saved_traces_come_back_newest_first_and_print_readably():
     assert [r["trace_id"] for r in rows] == ["t2", "t1"]
     text = traces.line(rows[1])
     assert "qwen/qwen3.8-27b" in text and "openai/gpt-oss-120b:no_vision" in text and "3.2s" in text
+
+
+def test_the_viewer_names_the_provider_shows_cost_and_lists_private_skips_once():
+    skips = ["gemini:gemini-3.5-flash-lite:privacy_blocked", "gemini:gemini-3.1-flash-lite:privacy_blocked"] * 3
+    save_trace(1, "t3", "reply", json.dumps({
+        "trace_id": "t3", "models": ["openrouter:openai/gpt-oss-120b"] * 3, "est_cost_usd": 0.0012,
+        "fallbacks": skips + ["groq:openai/gpt-oss-120b:rate_limit"], "steps": [], "outcome": "reply",
+        "total_ms": 4000}))
+    text = traces.line(recent_traces(1)[0])
+    assert "models: openrouter:openai/gpt-oss-120b  cost: $0.0012" in text
+    assert "failed: groq:openai/gpt-oss-120b:rate_limit\n" in text
+    assert text.endswith("not used for private content: gemini:gemini-3.5-flash-lite, gemini:gemini-3.1-flash-lite")
 
 
 def test_every_agent_reply_saves_its_trace(monkeypatch):
