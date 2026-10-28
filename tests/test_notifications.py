@@ -3,6 +3,8 @@ Telegram as before unless turned off. Offline: Telegram and the push services ar
 and a fake phone decrypts what it got.
 
 Owner Neel = 111 (Telegram 111), member Dad = 222. The clock is fixed so reminders come due when a test says.
+It's fixed at the real minute the tests start: the outbox stamps rows with the database's own clock, so a
+fixed date went stale (a fixed Oct 28, 17:00 UTC failed every test from then on).
 """
 from datetime import datetime, timedelta, timezone
 
@@ -16,7 +18,7 @@ from tests.test_push import Phone
 
 OWNER, DAD = 111, 222
 SITE = "https://sidekick.example.org"
-NOW = datetime(2026, 10, 28, 17, 0, tzinfo=timezone.utc)
+NOW = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 
 
 @pytest.fixture
