@@ -22,6 +22,7 @@ TICKET = {"id": "t1", "from": "Fly Example <noreply@fly.example>", "subject": "Y
     "Shall I check that email?",
     "Could you try searching your inbox with a more specific keyword (e.g., the provider's name) and let me know "
     "the exact subject or forward the email?",                                   # gpt-oss, Oct 27
+    "If you can forward a receipt or give more details, I can try again.",         # gpt-oss, Oct 28
 ])
 def test_asking_the_user_to_open_or_send_their_email_is_caught(reply):
     assert asks_for_email(reply)
@@ -88,3 +89,23 @@ def test_email_dates_come_in_the_users_timezone(monkeypatch):
 
     message["payload"]["headers"][0]["value"] = "sometime last week"  # unparseable: left as the sender wrote it
     assert gmail.read_email("m1", ctx=la)["date"] == "sometime last week"
+
+
+def test_the_html_copy_is_read_when_the_plain_copy_is_only_a_link(monkeypatch):
+    """Oct 28: a pizza order's plain copy was a link; the HTML copy (after 3,000 characters of CSS) had the price."""
+    def b64(text):
+        import base64
+        return base64.urlsafe_b64encode(text.encode()).decode()
+    page = ("<html><head><style>" + ".x{color:red}" * 250 + "</style></head><body><!-- tracking -->"
+            "<table><tr><td>Medium Pepperoni</td><td>$14.99</td></tr><tr><td>Total</td><td>$23.45</td></tr></table>"
+            "<p>Thanks&nbsp;for your order!</p><script>track()</script></body></html>")
+    message = {"id": "m1", "payload": {"mimeType": "multipart/alternative", "headers": [], "parts": [
+        {"mimeType": "text/plain", "body": {"data": b64("View your order: https://order.example/123")}},
+        {"mimeType": "text/html", "body": {"data": b64(page)}}]}}
+    monkeypatch.setattr(gmail, "google_request", lambda *a, **k: message)
+
+    body = gmail.read_email("m1")["body"]
+    assert body == "Medium Pepperoni $14.99\nTotal $23.45\nThanks for your order!"
+
+    message["payload"]["parts"][0]["body"]["data"] = b64("Your order: Medium Pepperoni $14.99, Total $23.45. Thanks!")
+    assert gmail.read_email("m1")["body"].startswith("Your order:")  # a plain copy that says as much is kept

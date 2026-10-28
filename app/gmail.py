@@ -83,6 +83,15 @@ def _find_text(part: dict, mime: str) -> str:
     return ""
 
 
+def html_text(page: str) -> str:
+    """An HTML email's readable text: without its <style>/<script> code (newsletters start with thousands of
+    characters of it), with a line break where a paragraph, row or line ends."""
+    page = re.sub(r"(?is)<(head|style|script)\b.*?</\1\s*>|<!--.*?-->", " ", page)
+    page = re.sub(r"(?i)<br\s*/?>|</(p|div|tr|li|h[1-6]|table)\s*>", "\n", page)
+    page = html.unescape(re.sub(r"<[^>]+>", " ", page))
+    return re.sub(r"\s*\n\s*", "\n", re.sub(r"[ \t\r\f\v\xa0]+", " ", page)).strip()
+
+
 def _attachment_parts(part: dict) -> list[dict]:
     """Every part with a filename (attachments), anywhere in the MIME tree."""
     found = [part] if part.get("filename") else []
@@ -145,10 +154,11 @@ def read_email(message_id: str, *, ctx=None) -> dict:
     if "error" in msg:
         return msg
     payload = msg.get("payload", {})
-    body = _find_text(payload, "text/plain")
-    if not body:  # HTML-only email: crude tag strip is enough for the model to read it
-        body = re.sub(r"<[^>]+>", " ", _find_text(payload, "text/html"))
-        body = re.sub(r"\s+", " ", html.unescape(body))
+    # Most emails carry two copies. The plain one is sometimes just "View your order: <link>" while the HTML one
+    # (what a mail app shows) has the order table (Oct 28, a pizza order's price): read the HTML when it says more.
+    plain, rich = _find_text(payload, "text/plain"), html_text(_find_text(payload, "text/html"))
+    words = len(re.sub(r"https?://\S+", "", plain))  # a long tracking link doesn't make the plain copy say more
+    body = rich if len(rich) > 1.5 * words else plain
     body = re.sub(r"[ \t]+", " ", INVISIBLE.sub("", body)).strip()
     h = _headers(msg)
     return {

@@ -606,7 +606,7 @@ UNSEEN = " The user hasn't seen that draft: don't mention it or apologize, just 
 # "Could you send that ticket email?" instead of reading it. Sidekick can read their email itself.
 ASKS_FOR_EMAIL = re.compile(r"\b(could|can|shall|should|may) i (open|read|check|look at)\b|"
                             r"\b(could|can|would) you (please )?(forward|send|share)\b|"
-                            r"\bforward (me )?(the|that|this|it)\b|\b(try|you|please) search(ing)? (your|the) (inbox|email)", re.I)
+                            r"\bforward (me )?(a|an|the|that|this|it)\b|\b(try|you|please) search(ing)? (your|the) (inbox|email)", re.I)
 EMAIL_NUDGE = ("(Check by Sidekick, not the user) You asked the user to open, search or send an email. You can read "
                "their email yourself: search with search_emails (other words, the sender, a name written as one "
                "word) and open the right message with read_email, then answer. If it truly isn't there, say what "
