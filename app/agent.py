@@ -270,7 +270,7 @@ TOOL_DECLARATIONS = [
                                    "booking OR voucher OR itinerary OR flight) newer_than:120d'; add has:attachment "
                                    "for PDF itineraries and vouchers.",
                 },
-                "max_results": {"type": "integer", "description": "How many emails, at most 8 (the default)."},
+                "max_results": {"type": "integer", "description": "How many emails, at most 15 (the default)."},
             },
         },
     },

@@ -13,9 +13,12 @@ from pypdf import PdfReader
 from app.google_auth import google_request
 
 API = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
-MAX_BODY = 1500  # characters (~400 tokens); keeps requests under per-minute token limits (Groq: 8K/min)
-MAX_RESULTS = 8     # emails per search: the list is resent on every later call of the answer (was 15; Oct 27,
-MAX_SNIPPET = 150   # a member's booking questions hit the per-minute limit after one email, every time)
+# Sizes for the paid model first in line (OpenRouter, no per-minute limit). A request too big for Groq's free
+# 8K tokens/minute is passed on to the next model by the router. Oct 27: cutting searches to 8 emails with
+# 150-character previews (for Groq) lost an airline booking number a member had been given before.
+MAX_BODY = 6000     # characters of an email's text (~1,500 tokens): long airline emails keep the details lower down
+MAX_RESULTS = 15    # emails per search
+MAX_SNIPPET = 300   # characters per preview: Gmail's own are about 200, so this keeps them whole
 # Bookings and itineraries often live in PDF attachments. Read them, within limits: a PDF from a stranger is
 # untrusted input, and its text shares the same per-minute token budget.
 MAX_ATTACHMENT_TEXT = 2500   # characters across all attachments of one email

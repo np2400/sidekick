@@ -178,12 +178,12 @@ def test_privacy_block_gets_an_honest_reply_not_overloaded(world):
 def test_real_gmail_reader_trims_long_bodies_and_invisible_characters(monkeypatch):
     import base64
     from app import gmail
-    body = ("Hello​‌ " * 400).encode()  # ~2,400 visible chars once invisible padding is removed
+    body = ("Hello​‌ " * 1200).encode()  # ~7,200 visible chars once invisible padding is removed
     fake = {"payload": {"mimeType": "text/plain", "body": {"data": base64.urlsafe_b64encode(body).decode()},
                         "headers": [{"name": "Subject", "value": "Long"}]}}
     monkeypatch.setattr(gmail, "google_request", lambda *a, **k: fake)
 
     result = gmail.read_email("m1")
-    assert len(result["body"]) == gmail.MAX_BODY == 1500
+    assert len(result["body"]) == gmail.MAX_BODY == 6000
     assert result["truncated"] is True
     assert "​" not in result["body"]

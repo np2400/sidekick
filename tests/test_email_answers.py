@@ -64,8 +64,8 @@ def test_a_search_lists_at_most_8_emails_with_short_previews(monkeypatch):
             return {"messages": [{"id": f"m{i}"} for i in range(min(20, kwargs["params"]["maxResults"]))]}
         return {"id": url.rsplit("/", 1)[1], "snippet": "x" * 500, "payload": {"headers": []}}
     monkeypatch.setattr(gmail, "google_request", fake_request)
-    found = gmail.search_emails("flight", max_results=15)
-    assert asked[0]["maxResults"] == 8 and len(found["emails"]) == 8  # asked for 15: at most 8
+    found = gmail.search_emails("flight", max_results=50)
+    assert asked[0]["maxResults"] == 15 and len(found["emails"]) == 15  # asked for 50: at most 15
     assert all(len(e["snippet"]) <= gmail.MAX_SNIPPET for e in found["emails"])
     assert TOOL_BUDGET["search_emails"] == 3  # room to look for a cancellation
 
