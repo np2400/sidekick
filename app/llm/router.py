@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 
 from app.config import (GEMINI_API_KEY, GROQ_API_KEY, LLM_BLOCK_SENSITIVE, LLM_CANDIDATES, LLM_NOT_FOR_PRIVATE,
-                        LLM_VISION_CANDIDATES)
+                        LLM_VISION_CANDIDATES, OPENROUTER_API_KEY)
 from app.llm.gemini import GeminiAdapter
 from app.llm.openai_compat import OpenAICompatAdapter
 from app.llm.types import Attempt, LLMResponse, Message, ProviderError, ToolSpec
@@ -33,6 +33,15 @@ PRICES_PER_1M = {
     "gemini:gemini-3.5-flash-lite": (0.30, 2.50),
     "gemini:gemini-3.1-flash-lite": (0.25, 1.50),
 }
+
+
+# Providers whose answers say what they actually cost (OpenRouter's usage.cost): no price table needed.
+BILLED_PER_ANSWER = {"openrouter"}
+
+
+def priced(key: str) -> bool:
+    """Is this model's cost known, so a spending cap (evals --max-usd) can be enforced?"""
+    return key.split(":", 1)[0] in BILLED_PER_ANSWER or key in PRICES_PER_1M
 
 
 def estimate_cost(key: str, tokens_in: int, tokens_out: int) -> float | None:
@@ -117,7 +126,8 @@ class Router:
                     break
                 self.skip_until.pop(c.key, None)  # healthy again: close the breaker
                 response.attempts = attempts
-                response.cost_usd = estimate_cost(c.key, response.tokens_in, response.tokens_out)
+                if response.cost_usd is None:  # the provider didn't say: estimate from verified prices
+                    response.cost_usd = estimate_cost(c.key, response.tokens_in, response.tokens_out)
                 return response
             if attempts[-1].kind in ("too_large", "bad_generation"):
                 continue  # about this request (too big / an unlucky sample), not the model's health: no bench
@@ -144,6 +154,12 @@ def groq_extras(model: str) -> dict:
     return {"reasoning_format": "hidden"} if "qwen" in model else {}
 
 
+def openrouter_extras(model: str) -> dict:
+    # OpenRouter passes a request on to one of several hosts. Only hosts that don't keep the request (zero data
+    # retention) and don't train on it may take it; if none is up, it fails and the next candidate answers.
+    return {"provider": {"data_collection": "deny", "zdr": True}}
+
+
 @functools.cache
 def default_router() -> Router:
     adapters = {}
@@ -152,6 +168,9 @@ def default_router() -> Router:
     if GROQ_API_KEY:
         adapters["groq"] = OpenAICompatAdapter("groq", "https://api.groq.com/openai/v1", GROQ_API_KEY,
                                                extra_body=groq_extras)
+    if OPENROUTER_API_KEY:
+        adapters["openrouter"] = OpenAICompatAdapter("openrouter", "https://openrouter.ai/api/v1", OPENROUTER_API_KEY,
+                                                     extra_body=openrouter_extras)
     candidates = parse_candidates(LLM_CANDIDATES, LLM_BLOCK_SENSITIVE, LLM_NOT_FOR_PRIVATE)
     missing = sorted({c.provider for c in candidates} - adapters.keys())
     if missing:

@@ -6,7 +6,7 @@ import pytest
 
 from app.llm.gemini import GeminiAdapter
 from app.llm.openai_compat import OpenAICompatAdapter
-from app.llm.router import Candidate, Router, groq_extras
+from app.llm.router import Candidate, Router, groq_extras, openrouter_extras
 from app.llm.types import Message, ProviderError, ToolCall, ToolSpec
 
 TOOLS = [ToolSpec("list_tasks", "List tasks.", {"type": "object", "properties": {"query": {"type": "string"}}})]
@@ -121,6 +121,21 @@ def test_openai_request_shape_and_reasoning_setting_per_model():
     assert first["tools"][0]["function"]["name"] == "list_tasks"
     assert first["reasoning_format"] == "hidden"          # Qwen + tools needs it (Groq docs)
     assert "reasoning_format" not in server.body(1)       # GPT-OSS rejects it
+
+
+def test_openrouter_sends_only_to_private_hosts_and_reports_the_real_cost():
+    reply = openai_reply("hi")
+    reply["usage"]["cost"] = 0.000042  # OpenRouter says what the answer cost
+    server = FakeServer((200, reply), (200, openai_reply("hi")))
+    adapter = OpenAICompatAdapter("openrouter", "https://openrouter.ai/api/v1", "OKEY", client(server),
+                                  extra_body=openrouter_extras)
+    r = adapter.complete("openai/gpt-oss-120b", [Message("user", text="hi")], TOOLS, "", 10)
+
+    assert str(server.requests[0].url) == "https://openrouter.ai/api/v1/chat/completions"
+    assert server.body(0)["provider"] == {"data_collection": "deny", "zdr": True}  # no keeping, no training
+    assert r.cost_usd == 0.000042
+    assert groq(server).complete("openai/gpt-oss-120b", [Message("user", text="hi")], [], "", 10).cost_usd is None
+    assert "provider" not in server.body(1)  # Groq gets none of it
 
 
 def test_openai_tool_history_and_parsing():

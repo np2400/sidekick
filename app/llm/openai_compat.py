@@ -1,6 +1,6 @@
 """OpenAI-compatible adapter: one class for every provider speaking the chat/completions format.
 
-Groq today; OpenRouter or others later are just a different base_url + key in config.
+Groq and OpenRouter today: just a different base_url, key and request extras in app/llm/router.py.
 """
 import base64
 import json
@@ -99,8 +99,10 @@ class OpenAICompatAdapter:
                                   name=c["function"]["name"], args=args))
         text = THINK.sub("", msg.get("content") or "").strip()  # safety net if reasoning leaks into content
         usage = data.get("usage", {})
+        cost = usage.get("cost")  # OpenRouter: what this answer actually cost, in USD credits (Groq sends none)
         return LLMResponse(
             message=Message(role="assistant", text=text, tool_calls=calls, provider=self.name),
             provider=self.name, model=model, ms=ms,
             tokens_in=usage.get("prompt_tokens", 0), tokens_out=usage.get("completion_tokens", 0),
+            cost_usd=float(cost) if isinstance(cost, (int, float)) else None,
         )

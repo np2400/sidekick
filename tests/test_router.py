@@ -1,7 +1,7 @@
 """Router policy: retries, fallback, circuit breaker, privacy, cost. Fake adapters, fake clock, no waiting."""
 import pytest
 
-from app.llm.router import AllProvidersFailed, Candidate, Router, estimate_cost, parse_candidates
+from app.llm.router import AllProvidersFailed, Candidate, Router, estimate_cost, parse_candidates, priced
 from app.llm.types import LLMResponse, Message, ProviderError, classify_status
 
 
@@ -157,6 +157,22 @@ def test_cost_is_estimated_only_for_known_prices():
     assert router.complete(MSG, [], "sys").cost_usd == estimate_cost("gemini:gemini-3.8-flash", 1000, 100)
     assert estimate_cost("gemini:gemini-3.8-flash", 1_000_000, 0) == 0.75
     assert estimate_cost("groq:qwen/qwen3.8-27b", 1000, 100) is None  # unknown -> not guessed
+
+
+class BilledAdapter(FakeAdapter):
+    """Like OpenRouter: each answer says what it cost."""
+
+    def complete(self, model, messages, tools, system, timeout):
+        response = super().complete(model, messages, tools, system, timeout)
+        response.cost_usd = 0.0003
+        return response
+
+
+def test_a_cost_the_provider_reports_is_kept_not_re_estimated():
+    router, _ = make([BilledAdapter("openrouter")], [Candidate("openrouter", "openai/gpt-oss-120b")])
+    assert router.complete(MSG, [], "sys").cost_usd == 0.0003
+    assert priced("openrouter:openai/gpt-oss-120b") and priced("gemini:gemini-3.8-flash")  # evals --max-usd works
+    assert not priced("groq:qwen/qwen3.8-27b")
 
 
 def test_parse_candidates_keeps_slashes_and_privacy_flags():

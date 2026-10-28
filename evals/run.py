@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 from app import agent, db, memory
 from app.config import OWNER_TIMEZONE
-from app.llm.router import Router, default_router, estimate_cost, parse_candidates
+from app.llm.router import Router, default_router, parse_candidates, priced
 from app.llm.types import Image, Message
 from app.trace import ToolContext
 from evals.report import write_reports
@@ -112,7 +112,7 @@ class Recorder:
         response = self.llm(messages, tools, system, sensitive=sensitive, **options)
         self.requested += [{"tool": c.name, "args": c.args} for c in response.message.tool_calls]
         self.model_ms += response.ms  # time inside the model call only: excludes throttle pauses
-        self.cost_usd += response.cost_usd or 0.0  # paid-tier estimate from verified prices
+        self.cost_usd += response.cost_usd or 0.0  # OpenRouter's actual charge, or a paid-tier estimate
         return response
 
 
@@ -229,7 +229,7 @@ def main(argv=None) -> None:
     if any(m.startswith("gemini:") for m in models) and len(cases) * args.repeat > 6:
         print("Note: on Gemini's FREE tier (~20 requests/day per model) consider --limit 5.")
     if args.max_usd is not None:
-        unpriced = [m for m in models if estimate_cost(m, 1, 1) is None]
+        unpriced = [m for m in models if not priced(m)]
         if unpriced:
             print(f"Skipping {unpriced}: no verified price, so --max-usd can't be enforced for them.")
             models = [m for m in models if m not in unpriced]

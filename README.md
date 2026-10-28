@@ -30,6 +30,7 @@ flowchart LR
     U[Telegram] -->|webhook: secret check, owner allowlist, dedupe| A[Agent loop]
     A <-->|neutral messages| R[Model router]
     R --> G[Gemini]
+    R --> O[OpenRouter]
     R --> Q[Groq]
     A -->|validated tool calls| T[Tools]
     T --> C[Calendar / Gmail / Todoist / Fetch MCP]
@@ -41,7 +42,7 @@ flowchart LR
 Every message produces one JSON trace with metadata only (no message text, no tool arguments): logged, and saved in SQLite for 90 days so it survives redeploys. `python -m app.traces` shows the recent ones.
 
 - `app/agent.py`: tool-calling loop, tool schemas, approval gate, crash containment.
-- `app/llm/`: router with retries, fallback across Gemini and Groq, circuit breaker, privacy routing (email content only to allowed providers), cost estimates.
+- `app/llm/`: router with retries, fallback across OpenRouter, Groq and Gemini, circuit breaker, privacy routing (email content only to allowed providers), cost estimates.
 - `app/trace.py`, `app/logging_setup.py`: per-message trace and correlation ids on every log line.
 - `evals/`: synthetic dataset, scorers and runner for comparing models.
 
