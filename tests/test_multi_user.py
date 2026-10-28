@@ -133,10 +133,10 @@ def test_a_members_brief_never_reads_the_owners_calendar_or_email(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("a member's brief touched the owner's Google account")
     monkeypatch.setattr(brief, "list_events", forbidden)
-    monkeypatch.setattr(brief, "search_emails", forbidden)
+    monkeypatch.setattr(brief, "unread_digest", forbidden)
 
     facts = brief.gather(ctx=B)
-    assert "events" not in facts and "unread_email_last_24h" not in facts
+    assert "events" not in facts and "email" not in facts
     assert brief.plain_brief(facts).startswith("☀️")  # the no-AI fallback copes without them
     # The whole /brief path, not just the facts (this crashed for members in the first M1 deploy).
     assert brief.build_brief(ctx=B, llm=ScriptedProvider([text("Nothing planned today.")])).endswith(

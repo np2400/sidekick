@@ -18,6 +18,7 @@ PERSONAL = {  # table -> column holding the person's account id (chat_id means a
     "accounts": "id", "identities": "account_id", "conversations": "account_id", "chat_messages": "account_id",
     "sessions": "account_id", "link_codes": "account_id", "pending_links": "account_id", "jobs": "account_id",
     "push_subscriptions": "account_id", "notifications": "account_id", "notification_settings": "account_id",
+    "brief_preferences": "account_id", "briefs": "account_id",
     # Legacy, kept for rollback: these hold the Telegram id, which equals the account id for every account
     # born in Telegram (the only kind until W3, when web-born accounts arrive and `users` stops being written).
     "users": "telegram_id", "invites": "used_by",
@@ -29,7 +30,8 @@ SECRET_COLUMNS = {"google_accounts": {"token_encrypted"},   # never exported: th
                   "push_subscriptions": {"endpoint_hash", "endpoint_encrypted", "keys_encrypted"}}
 NOT_EXPORTED = {"oauth_states", "link_codes", "pending_links", "jobs"}  # short-lived internals (jobs: wiped)
 READABLE = {"conversations": ("title_encrypted", "title"), "chat_messages": ("text_encrypted", "text"),  # your own words
-            "notifications": ("body_encrypted", "body")}
+            "notifications": ("body_encrypted", "body"), "brief_preferences": ("interests_encrypted", "interests"),
+            "briefs": ("body_encrypted", "body")}
 
 
 def export_data(chat_id: int) -> dict:
@@ -48,7 +50,8 @@ def export_data(chat_id: int) -> dict:
                 if table in READABLE:
                     locked, name = READABLE[table]
                     try:
-                        row[name] = vault.unlock_text(row.pop(locked))
+                        value = row.pop(locked)
+                        row[name] = vault.unlock_text(value) if value else value  # interests may be unset
                     except vault.VaultError:
                         row[name] = "[can't be decrypted]"
             tables[table] = rows

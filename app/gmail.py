@@ -8,7 +8,7 @@ import io
 import logging
 import re
 from datetime import date, datetime, time, timedelta, timezone
-from email.utils import parsedate_to_datetime
+from email.utils import parseaddr, parsedate_to_datetime
 from zoneinfo import ZoneInfo
 
 from pypdf import PdfReader, PdfWriter
@@ -98,6 +98,61 @@ def _contents(payload: dict) -> str:
             pdfs += 1
     counts = [f"{n} {kind}{'s' if n > 1 else ''}" for n, kind in ((images, "image"), (pdfs, "PDF")) if n]
     return ", ".join(counts)
+
+
+# How the brief tells mail from a person apart from automated mail: Gmail's own inbox categories, then the headers
+# bulk senders must send, then the sender's address. Code decides, so an automated "we'd love to talk to you" can
+# never be presented as a personal email that needs a reply.
+GMAIL_CATEGORIES = {"CATEGORY_PROMOTIONS": "promotions", "CATEGORY_SOCIAL": "social", "CATEGORY_UPDATES": "updates",
+                    "CATEGORY_FORUMS": "forums"}
+AUTOMATED_SENDER = re.compile(r"(?:^|[._+-])(no-?reply|do-?not-?reply|notifications?|alerts?|mailer-daemon|"
+                              r"newsletters?|news|updates?|marketing|info|hello|support|jobs?)(?:[._+-][^@]*)?@",
+                              re.I)  # whole words only: kevin.jobson@ is a person
+DIGEST_HEADERS = ("From", "Subject", "Date", "List-Unsubscribe", "List-Id", "Precedence", "Auto-Submitted")
+
+
+def sender_name(from_header: str) -> str:
+    """'Maya Lee <maya@x.com>' -> 'Maya Lee': the brief names people, it doesn't list addresses."""
+    name, address = parseaddr(from_header)
+    return name.strip().strip('"') or address
+
+
+def email_kind(headers: dict, labels: list[str]) -> tuple[str, str]:
+    """("person", "") or ("automated", category). Category: Gmail's tab, else "updates" for other automated mail."""
+    category = next((GMAIL_CATEGORIES[label] for label in labels if label in GMAIL_CATEGORIES), "")
+    bulk = (headers.get("List-Unsubscribe") or headers.get("List-Id")
+            or headers.get("Precedence", "").lower() in {"bulk", "list", "junk"}
+            or headers.get("Auto-Submitted", "no").lower() != "no"
+            or AUTOMATED_SENDER.search(parseaddr(headers.get("From", ""))[1] or ""))
+    if category or bulk:
+        return "automated", category or "updates"
+    return "person", ""
+
+
+def unread_digest(max_emails: int = 30, *, ctx=None) -> dict:
+    """The last day's unread mail for the brief, sorted in code: from people, or automated (with its category).
+    Headers and Gmail's preview only, never bodies. total: Gmail's estimate of all of it, beyond max_emails."""
+    data = google_request("GET", API, "Gmail", ctx,
+                          params={"q": "is:unread newer_than:1d -in:spam -in:chats", "maxResults": max_emails})
+    if "error" in data:
+        return data
+    people, automated = [], []
+    for ref in data.get("messages", []):
+        msg = google_request("GET", f"{API}/{ref['id']}", "Gmail", ctx,
+                             params=[("format", "metadata"), *(("metadataHeaders", h) for h in DIGEST_HEADERS)])
+        if "error" in msg:
+            return msg
+        h = _headers(msg)
+        kind, category = email_kind(h, msg.get("labelIds", []))
+        email = {"from": sender_name(h.get("From", "")), "subject": h.get("Subject") or "(no subject)",
+                 "date": _local_date(h.get("Date", ""), ctx),
+                 "snippet": INVISIBLE.sub("", html.unescape(msg.get("snippet", ""))).strip()[:MAX_SNIPPET]}
+        if kind == "person":
+            people.append(email)
+        else:
+            automated.append({**email, "category": category})
+    return {"total": max(data.get("resultSizeEstimate", 0), len(people) + len(automated)),
+            "people": people, "automated": automated}
 
 
 def search_emails(query: str = "", day: str = "", direction: str = "any", max_results: int = MAX_RESULTS, *,

@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from fastapi.testclient import TestClient
 
-from app import account, db, google_web, main, memory, native_tasks, notifications, reminders, settings, users, web_login
+from app import account, brief, db, google_web, main, memory, native_tasks, notifications, reminders, settings, users, web_login
 from app.agent import PENDING
 from app.config import OWNER_TIMEZONE
 from app.db.store import log_action, save_trace
@@ -51,6 +51,8 @@ def fill(chat_id: int, name: str) -> None:
                      "device_label) VALUES (?, ?, 'LOCKED', 'LOCKED', ?)", (chat_id, f"hash-{chat_id}", f"{name}'s phone"))
         conn.execute("INSERT INTO notification_settings (account_id, telegram) VALUES (?, 0)", (chat_id,))
     notifications.record(chat_id, "reminder", f"{name}'s reminder went off", f"delivery:{name}")  # + its phone send
+    settings.set_brief_preferences(chat_id, f"{name} cares about family dinners", ["promotions"])
+    brief.save_latest(chat_id, f"☀️ {name}'s brief")
 
 
 @pytest.fixture(autouse=True)
@@ -138,6 +140,8 @@ def test_export_sends_your_own_data_as_a_file(bot):
     chat_id, name, data = bot["files"][0]
     assert chat_id == SAM and name.startswith("sidekick-export-") and data["chat_id"] == SAM
     assert "Owner" not in json.dumps(data)
+    assert data["tables"]["brief_preferences"][0]["interests"] == "Sam cares about family dinners"  # readable
+    assert data["tables"]["briefs"][0]["body"] == "☀️ Sam's brief"
 
 
 def test_delete_me_asks_first_then_erases_and_the_member_is_out(bot):

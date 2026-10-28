@@ -14,7 +14,7 @@ from app.trace import ToolContext
 
 OWNER, DAD = 111, 222
 ENDPOINTS = ["/api/me", "/api/conversations", "/api/conversations/1", "/api/reminders", "/api/tasks",
-             "/api/connections", "/api/settings"]
+             "/api/connections", "/api/settings", "/api/brief"]
 
 
 @pytest.fixture
@@ -78,7 +78,8 @@ def test_reminders_tasks_and_settings_are_your_own(people):
     me, dad = people(OWNER), people(DAD)
     assert [r["text"] for r in me.get("/api/reminders").json()] == ["Neel's reminder"]
     assert [t["title"] for t in dad.get("/api/tasks").json()["tasks"]] == ["Dad's task"]
-    assert me.get("/api/settings").json().keys() == {"timezone", "brief_time", "telegram", "telegram_notifications"}
+    assert me.get("/api/settings").json().keys() == {"timezone", "brief_time", "brief", "telegram",
+                                                     "telegram_notifications"}
     assert me.get("/api/me").json() == {"name": "Neel", "role": "owner", "telegram": True, "google": None}
     assert dad.get("/api/me").json()["role"] == "member"
 

@@ -158,7 +158,7 @@ def test_a_calendar_only_member_gets_calendar_tools_but_no_gmail(google):
 def test_a_connected_members_brief_reads_their_own_calendar(google, monkeypatch):
     seen = []
     monkeypatch.setattr(brief, "list_events", lambda start, end, ctx: seen.append(ctx) or {"events": []})
-    monkeypatch.setattr(brief, "search_emails", lambda *a, **k: pytest.fail("a member's brief read Gmail"))
+    monkeypatch.setattr(brief, "unread_digest", lambda *a, **k: pytest.fail("a member's brief read Gmail"))
     dad = ToolContext(chat_id=DAD, user_id="222", role="member", calendar=True)
     assert "events" in brief.gather(ctx=dad) and seen == [dad]
 
@@ -246,8 +246,9 @@ def test_a_member_with_gmail_reads_only_their_own_inbox(google, monkeypatch):
 def test_a_member_brief_includes_their_own_email_only_if_they_connected_gmail(google, monkeypatch):
     seen = []
     monkeypatch.setattr(brief, "list_events", lambda start, end, ctx: {"events": []})
-    monkeypatch.setattr(brief, "search_emails", lambda query, max_results, ctx: seen.append(ctx) or {"emails": []})
+    monkeypatch.setattr(brief, "unread_digest", lambda ctx: seen.append(ctx) or {"total": 0, "people": [],
+                                                                                 "automated": []})
     with_gmail = ToolContext(chat_id=DAD, user_id="222", role="member", calendar=True, gmail=True)
     calendar_only = ToolContext(chat_id=SAM, user_id="333", role="member", calendar=True)
-    assert "unread_email_last_24h" in brief.gather(ctx=with_gmail) and seen == [with_gmail]
-    assert "unread_email_last_24h" not in brief.gather(ctx=calendar_only)
+    assert "email" in brief.gather(ctx=with_gmail) and seen == [with_gmail]
+    assert "email" not in brief.gather(ctx=calendar_only)

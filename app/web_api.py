@@ -10,16 +10,16 @@ import base64
 import binascii
 import json
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 
-from app import (daily, gmail, google_auth, google_web, jobs, memory, native_tasks, notifications, push, reminders,
+from app import (brief, daily, gmail, google_auth, google_web, jobs, memory, native_tasks, notifications, push, reminders,
                  settings, uploads, users, vault, web_login)
 from app.agent import PENDING, decide
-from app.config import TASK_BACKEND, TELEGRAM_OWNER_ID
+from app.config import MEMBER_DAILY_LIMIT, TASK_BACKEND, TELEGRAM_OWNER_ID
 from app.trace import ToolContext
 
 log = logging.getLogger("sidekick.web")
@@ -293,8 +293,29 @@ def connection_list(account_id: int = Depends(signed_in)) -> dict:
 def preferences(account_id: int = Depends(signed_in)) -> dict:
     return {"timezone": settings.timezone_of(account_id),
             "brief_time": daily.brief_time_for(account_id, _role(account_id)) or None,
+            "brief": {**settings.brief_preferences(account_id), "categories": settings.CATEGORIES,
+                      "max_interests": settings.MAX_INTERESTS},
             "telegram": users.telegram_chat(account_id) is not None,
             "telegram_notifications": notifications.telegram_on(account_id)}
+
+
+class BriefChoice(BaseModel):
+    time: str = Field(max_length=10)                      # "07:30", "7:30am" or "off"
+    interests: str = Field(default="", max_length=2000)   # trimmed and checked in settings.set_brief_preferences
+    hidden: list[str] = Field(default_factory=list, max_length=10)
+
+
+@router.post("/settings/brief", dependencies=[Depends(from_our_pages)])
+def brief_settings(choice: BriefChoice, account_id: int = Depends(signed_in)) -> dict:
+    """The morning brief: when (or off), what matters to this person, and which email categories to leave out."""
+    if settings.parse_clock(choice.time) is None and choice.time.strip().lower() != "off":
+        raise HTTPException(status_code=422, detail="Pick a time like 7:30, or turn the brief off.")
+    try:
+        settings.set_brief_preferences(account_id, choice.interests, choice.hidden)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    settings.set_brief_time(account_id, choice.time)
+    return preferences(account_id)
 
 
 class TelegramChoice(BaseModel):
@@ -306,6 +327,30 @@ def telegram_notifications(choice: TelegramChoice, account_id: int = Depends(sig
     """Also send reminders and the brief to Telegram? Off takes effect only while a device gets notifications."""
     notifications.set_telegram(account_id, choice.on)
     return preferences(account_id)
+
+
+# --- The morning brief on the web ------------------------------------------------------------------------------
+
+AGAIN_AFTER = timedelta(minutes=1)  # "Make my brief now" at most once a minute: each one is an AI call
+
+
+@router.get("/brief")
+def latest_brief(account_id: int = Depends(signed_in)) -> dict:
+    return {"latest": brief.latest(account_id)}
+
+
+@router.post("/brief", dependencies=[Depends(from_our_pages)])
+def make_brief(account_id: int = Depends(signed_in)) -> dict:
+    """Build it now (a few seconds: Gmail, then one AI call) and keep it as the latest. Not sent anywhere else."""
+    before = brief.latest(account_id)
+    made_at = before and datetime.fromisoformat(before["made_at"].replace("Z", "+00:00"))  # Python 3.10: no "Z"
+    if made_at and datetime.now(timezone.utc) - made_at < AGAIN_AFTER:
+        raise HTTPException(status_code=429, detail="You just made one: try again in a minute.")
+    ctx = daily.context(account_id, _role(account_id))
+    if ctx.role != "owner" and settings.count_request(account_id, ctx.tz) > MEMBER_DAILY_LIMIT:
+        raise HTTPException(status_code=429, detail="You've reached today's limit. It resets at midnight.")
+    brief.save_latest(account_id, brief.build_brief(ctx=ctx))
+    return {"latest": brief.latest(account_id)}
 
 
 # --- The notification center (W6b) ----------------------------------------------------------------------------
