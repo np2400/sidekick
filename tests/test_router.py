@@ -208,3 +208,15 @@ def test_avoiding_every_model_fails_cleanly():
 def test_gemini_through_openrouter_can_take_photos_but_gpt_oss_cannot():
     cs = parse_candidates("openrouter:google/gemini-3.1-flash-lite,openrouter:openai/gpt-oss-120b", set())
     assert [c.vision for c in cs] == [True, False]
+
+
+def test_with_the_default_settings_the_paid_photo_backup_answers_a_photo_when_free_gemini_is_out():
+    """A photo counts as private, so the backup must not be on the not-for-private list (it was, briefly)."""
+    from app.config import LLM_BLOCK_SENSITIVE, LLM_NOT_FOR_PRIVATE, LLM_VISION_CANDIDATES
+    from app.llm.types import Image
+    vision = parse_candidates(LLM_VISION_CANDIDATES, LLM_BLOCK_SENSITIVE, LLM_NOT_FOR_PRIVATE)
+    router = Router([], {"gemini": FakeAdapter("gemini", "rate_limit"), "openrouter": FakeAdapter("openrouter")},
+                    vision_candidates=vision, sleep=lambda s: None)
+    photo = [Message("user", text="dates?", images=[Image(data=b"\xff\xd8", mime="image/jpeg")])]
+    answer = router.complete(photo, [], "sys", sensitive=True)
+    assert (answer.provider, answer.model) == ("openrouter", "google/gemini-3.1-flash-lite")
