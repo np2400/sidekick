@@ -190,3 +190,23 @@ def test_a_button_tap_after_a_restart_cut_off_the_approval_is_reported_and_not_r
     assert UNSURE in server["sent"][0] and "(create event)" in server["sent"][0]
     assert server["sent"][1] == "That request was already handled or replaced."
     assert google["created"] == []  # it never calls Google to "find out" by trying again
+
+
+def test_dates_without_times_become_an_all_day_event_with_the_last_day_included(google, monkeypatch):
+    """Oct 28: a receipt's arrival and departure dates (no times) became a made-up 9 AM to 6 PM event."""
+    sent = {}
+
+    def request(method, url, headers, json=None, **_):
+        sent.update(json)
+        return httpx.Response(200, json={"id": "e2", **json}, request=httpx.Request(method, url))
+    monkeypatch.setattr(google_auth.httpx, "request", request)  # records what's sent to Google
+
+    assert gcal.validate_event("MCA stay", "2026-12-18", "2026-12-22") is None
+    result = gcal.create_event("MCA stay", "2026-12-18", "2026-12-22", ctx=CTX)
+    assert sent["start"] == {"date": "2026-12-18"} and sent["end"] == {"date": "2026-12-23"}  # Google: end excluded
+    assert result["summary"] == "Added to calendar: MCA stay (Fri Dec 18 to Tue Dec 22, all day)"
+
+    assert gcal.validate_event("Trip", "2026-12-22", "2026-12-18") == "The last day can't be before the first."
+    assert gcal.validate_event("Mixed", "2026-12-18", "2026-12-18T10:00:00").startswith("Give both")
+    assert gcal.create_event("Dentist day", "2026-12-18", "2026-12-18", ctx=CTX)["summary"].endswith(
+        "(Fri Dec 18, all day)")

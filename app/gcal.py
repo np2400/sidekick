@@ -4,7 +4,8 @@ The owner uses the server-level sign-in; members use the calendar they connected
 decided by `ctx`, which the server fills in (the model can't pass it).
 """
 import logging
-from datetime import datetime, timedelta
+import re
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.config import OWNER_TIMEZONE
@@ -67,26 +68,44 @@ def list_events(start: str = "", end: str = "", query: str = "", *, ctx=None) ->
     return result
 
 
+DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def all_day(start: str, end: str) -> bool:
+    """Dates without times: an all-day event (a receipt or booking gives dates only; times would be made up)."""
+    return bool(DAY.fullmatch(start) and DAY.fullmatch(end))
+
+
 def validate_event(summary: str, start: str, end: str) -> str | None:
     """Checked BEFORE asking for approval, so nobody approves a broken event."""
     if not summary.strip():
         return "The event needs a title."
     try:
-        if _parse(end) <= _parse(start):
+        if all_day(start, end):
+            if date.fromisoformat(end) < date.fromisoformat(start):
+                return "The last day can't be before the first."
+        elif DAY.fullmatch(start) or DAY.fullmatch(end):
+            return "Give both start and end as dates (all day) or both as datetimes."
+        elif _parse(end) <= _parse(start):
             return "The event must end after it starts."
     except ValueError:
-        return "start and end must be ISO datetimes like 2026-10-16T09:00:00."
+        return "start and end must be ISO datetimes like 2026-10-16T09:00:00, or dates like 2026-10-16 for all day."
     return None
 
 
 def create_event(summary: str, start: str, end: str, *, ctx=None) -> dict:
     tz = _tz(ctx)
-    data = _request("POST", ctx, json={
-        "summary": summary,
-        "start": {"dateTime": _parse(start, tz).isoformat(), "timeZone": tz},
-        "end": {"dateTime": _parse(end, tz).isoformat(), "timeZone": tz},
-    })
+    if all_day(start, end):  # `end` is the last day; Google's all-day end is the day after it
+        times = {"start": {"date": start}, "end": {"date": (date.fromisoformat(end) + timedelta(days=1)).isoformat()}}
+    else:
+        times = {"start": {"dateTime": _parse(start, tz).isoformat(), "timeZone": tz},
+                 "end": {"dateTime": _parse(end, tz).isoformat(), "timeZone": tz}}
+    data = _request("POST", ctx, json={"summary": summary, **times})
     if "error" in data:
         return data
-    when = _parse(data["start"]["dateTime"], tz).astimezone(ZoneInfo(tz)).strftime("%a %b %d, %I:%M %p")
+    if "dateTime" in data["start"]:
+        when = _parse(data["start"]["dateTime"], tz).astimezone(ZoneInfo(tz)).strftime("%a %b %d, %I:%M %p")
+    else:
+        first, last = date.fromisoformat(data["start"]["date"]), date.fromisoformat(data["end"]["date"]) - timedelta(1)
+        when = f"{first:%a %b %d}" + (f" to {last:%a %b %d}" if last > first else "") + ", all day"
     return {"summary": f"Added to calendar: {data['summary']} ({when})", "id": data["id"]}

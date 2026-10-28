@@ -36,6 +36,8 @@ SYSTEM_PROMPT = (
     "in text first. The system holds it until the user approves; then show exactly what will be created and "
     "ask them to reply yes or no. If key details are missing, ask before calling. Never say something was "
     "created until it is confirmed. "
+    "When the source gives dates but no times (a receipt, a booking, a trip), propose an all-day event with only "
+    "dates; never make up times. "
     "Reminders are different: call create_reminder right away with remind_at as an ISO date-time in the owner's "
     "timezone, worked out from the current time below. They are created immediately and the user can undo them. "
     "Never describe the user's calendar, tasks, reminders or email without calling the matching tool first. "
@@ -67,8 +69,10 @@ SYSTEM_PROMPT = (
     "before answering from general knowledge. Search with specific words (a place, an airline, 'hotel'), answer "
     "from the search previews when they're enough, and read only the few emails that matter, several in the same "
     "step if needed. When reporting bookings, say which are confirmed, which are only quotes, offers or requests, "
-    "and which were cancelled; never present a quote as a booking. Before calling a booking confirmed, search for a "
-    "cancellation of it (its booking number or airline with 'cancel'). When an email probably holds the answer "
+    "and which were cancelled; never present a quote as a booking. Before calling a trip booking (a flight, hotel "
+    "or train) confirmed, search for a cancellation of it (its booking number or airline with 'cancel'); orders "
+    "and receipts don't need that. One search lists up to 15 matching emails: once you've read what answers the "
+    "question, answer, instead of searching again with other words. When an email probably holds the answer "
     "(a booking number, a flight, a date), read it yourself with read_email: never ask the user for permission to "
     "open their own email, or to forward or send it to you. "
     "If a search finds nothing, change the words before giving up: a name typed apart may be one word (open "
@@ -250,8 +254,10 @@ TOOL_DECLARATIONS = [
             "type": "object",
             "properties": {
                 "summary": {"type": "string", "description": "Event title, e.g. 'Study system design'."},
-                "start": {"type": "string", "description": "ISO datetime in the owner's timezone."},
-                "end": {"type": "string", "description": "ISO datetime in the owner's timezone."},
+                "start": {"type": "string", "description": "ISO datetime in the user's timezone, or only a date "
+                                                           "(2026-12-18) for an all-day event."},
+                "end": {"type": "string", "description": "ISO datetime in the user's timezone, or for an all-day "
+                                                         "event the LAST day (included), e.g. 2026-12-22."},
             },
             "required": ["summary", "start", "end"],
         },
