@@ -5,7 +5,7 @@ Each morning at the person's own time (app/daily.py), or on demand: /brief, or "
 import inspect
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app import db, reminders, settings, vault
@@ -16,6 +16,7 @@ from app.gmail import unread_digest
 from app.llm.router import AllProvidersFailed, default_router
 from app.llm.types import Message
 from app.trace import ToolContext
+from app.weather import when as day_label
 
 log = logging.getLogger("sidekick.brief")
 TRIGGERS = {"/brief", "brief", "brief me", "morning brief"}
@@ -32,19 +33,22 @@ Today: calendar events in time order, 12-hour times. If a calendar is connected 
 Needs attention: only things to act on: tasks due or overdue (mark overdue), today's reminders with their times,
 and emails in from_people that ask for a reply or an action (the sender's name and what they need, one line each).
 Nothing from automated email ever goes here.
-Inbox highlights: the 3 or 4 most useful recent emails from from_people, automated_groups and
-essentials_this_week, most useful first; fewer only if there aren't that many worth knowing. Count: messages from
+Inbox highlights: the 3 or 4 most useful emails from the last 2 days (from_people and automated_groups only),
+most useful first; fewer only if there aren't that many worth knowing. Count: messages from
 people or teams (including missed chat messages), receipts and payment or order confirmations, bookings,
 appointments and invitations, deliveries, statements and account notices, especially ones asking for an action.
 Not newsletters, articles, marketing or social notifications, even when their topic matches. Items that only match
 what_matters_to_user go under For you instead. One line each: who it's from, what it's about, and why it matters,
 from the email itself, never a guess. Not emails already under Needs attention.
-Coming up: the next 3 days, at most 3 lines, soonest first, each with its day ("tomorrow", "Friday"): events from
-upcoming_events, and appointments, travel, deliveries, bills and payments with a date in the next 3 days, mostly
-from essentials_this_week.
-For you: at most 2 items from automated_groups that clearly match what_matters_to_user, not already above. A group is one item,
-however many emails it has. One strong item beats a weak second one; leave the section out if nothing qualifies.
-Leave newsletters, promotions and routine alerts out. Never call an automated email personal or say it needs a reply.
+Coming up: the next 3 days, at most 3 lines, soonest first, each with its day ("tomorrow", "Friday"), copied from
+the event's "day" (never work out a weekday yourself): events from upcoming_events, and appointments, travel,
+deliveries, bills and payments from essentials_this_week, only when the email itself gives a date in the next 3
+days. essentials_this_week is only for Coming up: a booking or trip whose dates have passed, or aren't given, is
+left out (Oct 28: last week's finished hotel stay showed up as a highlight).
+For you: at most 2 items from automated_groups that clearly match what_matters_to_user, not already above. A group
+is one item, however many emails it has. One strong item beats a weak second one; leave the section out if nothing
+qualifies. Leave newsletters, promotions and routine alerts out. Never call an automated email personal or say it
+needs a reply.
 Next step: one small action for today, only if something above clearly calls for it (reply to someone, prepare for
 an event, check in for a flight). Leave it out otherwise.
 
@@ -80,9 +84,25 @@ def gather(days_ahead: int = 0, ctx=None) -> dict:
         after = (when + timedelta(days=1)).strftime("%Y-%m-%d")
         until = (when + timedelta(days=LOOK_AHEAD_DAYS)).strftime("%Y-%m-%d")
         facts["upcoming_events"] = list_events(f"{after}T00:00:00", f"{until}T23:59:59", ctx=ctx)
+        for found in (facts["events"], facts["upcoming_events"]):
+            label_days(found, when)
     if owner or ctx.gmail:  # the owner's Gmail, or the member's own connected one
         facts["email"] = email_facts(unread_digest(ctx=ctx), prefs["hidden"])
     return facts
+
+
+def label_days(found: dict, now: datetime) -> None:
+    """Each event's day spelled out in code, e.g. "Friday Oct 30 (in 2 days)": from a bare 2026-10-30 a model once
+    wrote Saturday for a Friday appointment (Oct 28). Times are moved into the person's timezone first: Google gives
+    them in the calendar's own."""
+    for event in found.get("events", []):
+        start = str(event.get("start", ""))
+        try:
+            day = (datetime.fromisoformat(start.replace("Z", "+00:00")).astimezone(now.tzinfo).date() if "T" in start
+                   else date.fromisoformat(start))  # all-day events have a date only
+        except ValueError:
+            continue
+        event["day"] = f"{day:%A %b} {day.day} ({day_label(day, now.date())})"
 
 
 def email_facts(digest: dict, hidden: list[str]) -> dict:

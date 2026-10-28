@@ -140,6 +140,7 @@ def test_the_brief_gets_this_persons_priorities_and_its_own_short_instructions(m
     assert "why it matters" in prompt
     assert "unread emails" not in prompt
     assert "never that it's unpaid" in prompt and "never invent events" in prompt  # owner's rules, Oct 28
+    assert "essentials_this_week is only for Coming up" in prompt  # week-old confirmations aren't highlights
     assert llm.sensitive_flags == [True]  # email previews: only models allowed to see private content
 
 
@@ -229,3 +230,17 @@ def test_make_my_brief_now_shows_only_your_own_and_not_twice_a_minute(web):
     outsider = web["browser"](OWNER)
     outsider.headers["Origin"] = "https://evil.example"
     assert outsider.post("/api/brief").status_code == 403  # only from Sidekick's own pages
+
+
+def test_event_days_are_spelled_out_in_code_in_the_persons_timezone():
+    """Oct 28: from a bare date, the model called Dad's Friday club fitting Saturday."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    now = datetime(2026, 10, 28, 16, 25, tzinfo=ZoneInfo("America/Los_Angeles"))  # a Wednesday afternoon
+    found = {"events": [{"summary": "GOLFTEC Club Fitting", "start": "2026-10-30T10:00:00-07:00"},
+                        {"summary": "Flight lands", "start": "2026-10-30T02:30:00+05:30"},  # India calendar: Thursday here
+                        {"summary": "Diwali", "start": "2026-11-08"},                        # all day
+                        {"summary": "Odd", "start": "soon"}]}
+    brief.label_days(found, now)
+    assert [e.get("day") for e in found["events"]] == [
+        "Friday Oct 30 (in 2 days)", "Thursday Oct 29 (tomorrow)", "Sunday Nov 8 (in 11 days)", None]
