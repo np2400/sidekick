@@ -96,8 +96,9 @@ class FakeWorld:
         self.events.append({"summary": summary, "start": start, "end": end})
         return {"summary": f"Added to calendar: {summary}", "id": f"e{len(self.events)}"}
 
-    def search_emails(self, query: str = "is:unread newer_than:1d", max_results: int = 10) -> dict:
-        error = self._enter("search_emails", {"query": query, "max_results": max_results})
+    def search_emails(self, query: str = "", day: str = "", direction: str = "any", max_results: int = 10) -> dict:
+        error = self._enter("search_emails", {"query": query, "day": day, "direction": direction,
+                                              "max_results": max_results})
         if error:
             return error
         found = [{k: e[k] for k in ("id", "from", "subject", "date", "snippet")} for e in self.emails]

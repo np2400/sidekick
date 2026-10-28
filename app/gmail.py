@@ -7,12 +7,14 @@ import html
 import io
 import logging
 import re
+from datetime import date, datetime, time, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
 
 from pypdf import PdfReader, PdfWriter
 
 from app.config import OWNER_TIMEZONE
+from app.weather import when as day_label
 from app.google_auth import google_request
 from app.llm.types import Image
 
@@ -40,45 +42,107 @@ log = logging.getLogger("sidekick.gmail")
 INVISIBLE = re.compile(r"[\u200b-\u200f\u034f\u00ad\ufeff]")  # newsletter padding: costs tokens, means nothing
 
 
+def clock() -> datetime:
+    return datetime.now(timezone.utc)  # replaced in tests, so "today" and "yesterday" don't depend on the real date
+
+
 def _local_date(header: str, ctx) -> str:
-    """An email's Date header in the user's timezone: senders often write UTC, and models repeat it as given
-    (Oct 27: "Oct 25, 05:35 UTC" for a payment made the evening of Oct 24). Unparseable: left as it is."""
+    """An email's Date header in the user's timezone, labelled "today", "yesterday"...: senders often write UTC,
+    and models repeat it as given (Oct 27: "Oct 25, 05:35 UTC" for a payment made the evening of Oct 24), or call
+    last night's email today's (Oct 28). Unparseable: left as it is."""
+    tz = ZoneInfo(getattr(ctx, "tz", None) or OWNER_TIMEZONE)
     try:
-        when = parsedate_to_datetime(header).astimezone(ZoneInfo(getattr(ctx, "tz", None) or OWNER_TIMEZONE))
+        when = parsedate_to_datetime(header).astimezone(tz)
     except (TypeError, ValueError, IndexError):
         return header
-    return f"{when:%a %b} {when.day} {when:%Y}, {when.hour % 12 or 12}:{when:%M %p} ({when.tzname()})"
+    label = day_label(when.date(), clock().astimezone(tz).date())
+    return f"{when:%a %b} {when.day} {when:%Y}, {when.hour % 12 or 12}:{when:%M %p} ({when.tzname()}), {label}"
 
 
 def _headers(message: dict) -> dict:
     return {h["name"]: h["value"] for h in message.get("payload", {}).get("headers", [])}
 
 
-def search_emails(query: str = "is:unread newer_than:1d", max_results: int = MAX_RESULTS, *, ctx=None) -> dict:
-    """query uses Gmail's own search syntax, exactly like the Gmail search box."""
-    data = google_request("GET", API, "Gmail", ctx, params={"q": query, "maxResults": min(max_results, MAX_RESULTS)})
+DIRECTIONS = {"any": "", "sent": "from:me", "received": "-from:me"}  # sent includes emails to themselves
+
+
+def _part_fields(depth: int) -> str:
+    """Gmail fields for a MIME part, nested `depth` levels: the structure and sizes, never the content."""
+    part = "mimeType,filename,body(size,attachmentId)"
+    return part if depth == 0 else f"{part},parts({_part_fields(depth - 1)})"
+
+
+# Per search result: headers, Gmail's preview and the MIME tree (to count images and PDFs), without downloading
+# any text or file: a search lists up to 15 emails.
+SEARCH_FIELDS = f"id,snippet,payload(headers,{_part_fields(4)})"
+
+
+def day_bounds(day: str, tz: str) -> tuple[int, int]:
+    """"today", "yesterday" or YYYY-MM-DD, as that whole day in the user's timezone, in Unix seconds. Gmail's own
+    newer_than:1d is the last 24 hours, and its after:/before: dates use its own timezone; seconds are exact."""
+    zone = ZoneInfo(tz)
+    today = clock().astimezone(zone).date()
+    wanted = {"today": today, "yesterday": today - timedelta(days=1)}.get(day.strip().lower())
+    wanted = wanted or date.fromisoformat(day.strip())  # ValueError: not a day
+    start, end = (datetime.combine(d, time(), zone) for d in (wanted, wanted + timedelta(days=1)))
+    return int(start.timestamp()), int(end.timestamp())
+
+
+def _contents(payload: dict) -> str:
+    """What an email carries besides text, e.g. "1 image, 1 PDF": an email that's only a picture shows here."""
+    images = pdfs = 0
+    for part in _attachment_parts(payload):
+        if part.get("mimeType") in IMAGE_TYPES and part.get("body", {}).get("size", 0) >= MIN_IMAGE_BYTES:
+            images += 1
+        elif _is_pdf(part):
+            pdfs += 1
+    counts = [f"{n} {kind}{'s' if n > 1 else ''}" for n, kind in ((images, "image"), (pdfs, "PDF")) if n]
+    return ", ".join(counts)
+
+
+def search_emails(query: str = "", day: str = "", direction: str = "any", max_results: int = MAX_RESULTS, *,
+                  ctx=None) -> dict:
+    """query uses Gmail's own search syntax. day and direction narrow it in code: the user's own day, and emails
+    they sent or received. With neither words nor day, today's unread."""
+    if direction not in DIRECTIONS:
+        return {"error": "direction must be any, sent or received."}
+    terms = [query.strip(), DIRECTIONS[direction]]
+    if day:
+        try:
+            start, end = day_bounds(day, getattr(ctx, "tz", None) or OWNER_TIMEZONE)
+        except ValueError:
+            return {"error": "day must be today, yesterday or a date like 2026-10-28."}
+        terms.append(f"after:{start} before:{end}")
+    full_query = " ".join(t for t in terms if t) or "is:unread newer_than:1d"
+    data = google_request("GET", API, "Gmail", ctx,
+                          params={"q": full_query, "maxResults": min(max_results, MAX_RESULTS)})
     if "error" in data:
         return data
 
     emails = []
     for ref in data.get("messages", []):
-        # One small request per message: headers + Gmail's short preview, not the full body.
-        msg = google_request("GET", f"{API}/{ref['id']}", "Gmail", ctx, params=[
-            ("format", "metadata"), ("metadataHeaders", "From"),
-            ("metadataHeaders", "Subject"), ("metadataHeaders", "Date"),
-        ])
+        msg = google_request("GET", f"{API}/{ref['id']}", "Gmail", ctx,
+                             params={"format": "full", "fields": SEARCH_FIELDS})
+        if "error" in msg:  # e.g. Gmail refused the fields list: headers and preview only, as before (no counts)
+            log.warning("Search with attachment counts failed; falling back to headers only")
+            msg = google_request("GET", f"{API}/{ref['id']}", "Gmail", ctx, params=[
+                ("format", "metadata"), ("metadataHeaders", "From"),
+                ("metadataHeaders", "Subject"), ("metadataHeaders", "Date")])
         if "error" in msg:
             return msg
         h = _headers(msg)
-        emails.append({
+        email = {
             "id": msg["id"],
             "from": h.get("From", ""),
-            "subject": h.get("Subject", "(no subject)"),
+            "subject": h.get("Subject") or "(no subject)",
             "date": _local_date(h.get("Date", ""), ctx),
             # Newsletters pad previews with invisible characters; drop them (they cost tokens).
             "snippet": INVISIBLE.sub("", html.unescape(msg.get("snippet", ""))).strip()[:MAX_SNIPPET],
-        })
-    return {"query": query, "count": len(emails), "emails": emails}
+        }
+        if carries := _contents(msg.get("payload", {})):
+            email["attachments"] = carries
+        emails.append(email)
+    return {"query": full_query, "count": len(emails), "emails": emails}
 
 
 def _find_text(part: dict, mime: str) -> str:

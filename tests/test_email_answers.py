@@ -77,15 +77,18 @@ def test_the_smallest_models_dont_answer_once_email_is_involved():
     assert [c.allow_sensitive for c in candidates] == [True, False]
 
 
-def test_email_dates_come_in_the_users_timezone(monkeypatch):
-    """Senders often write UTC: a payment the evening of Oct 24 in California is dated Oct 25 05:35 UTC."""
+def test_email_dates_come_in_the_users_timezone_labelled_against_their_today(monkeypatch):
+    """Senders often write UTC: a payment the evening of Oct 24 in California is dated Oct 25 05:35 UTC. And Oct 28,
+    a receipt from the night before was called "today's": dates now say today, yesterday or how long ago."""
+    from datetime import datetime, timezone
+    monkeypatch.setattr(gmail, "clock", lambda: datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc))  # Oct 25 in both places
     message = {"id": "m1", "snippet": "Receipt", "payload": {"mimeType": "text/plain", "body": {"data": ""},
                "headers": [{"name": "Date", "value": "Sun, 25 Oct 2026 05:35:00 +0000"}]}}
     monkeypatch.setattr(gmail, "google_request", lambda method, url, *a, **k:
                         {"messages": [{"id": "m1"}]} if url == gmail.API else message)
     la, india = ToolContext(chat_id=1, tz="America/Los_Angeles"), ToolContext(chat_id=2, tz="Asia/Kolkata")
-    assert gmail.read_email("m1", ctx=la)["date"] == "Sat Oct 24 2026, 10:35 PM (PDT)"
-    assert gmail.search_emails("receipt", ctx=india)["emails"][0]["date"] == "Sun Oct 25 2026, 11:05 AM (IST)"
+    assert gmail.read_email("m1", ctx=la)["date"] == "Sat Oct 24 2026, 10:35 PM (PDT), yesterday"
+    assert gmail.search_emails("receipt", ctx=india)["emails"][0]["date"] == "Sun Oct 25 2026, 11:05 AM (IST), today"
 
     message["payload"]["headers"][0]["value"] = "sometime last week"  # unparseable: left as the sender wrote it
     assert gmail.read_email("m1", ctx=la)["date"] == "sometime last week"
@@ -147,3 +150,61 @@ def test_a_tool_whose_budget_is_used_up_is_no_longer_offered(world):
     assert result.reply == "You spent $11.31 on Oct 25." and result.trace.outcome == "reply"
     assert all("search_emails" in names for names in offered[:3]) and "search_emails" not in offered[3]
     assert "read_email" in offered[3]  # the other tools stay
+
+
+# --- Finding an email that's only a picture (Oct 28: a receipt photo emailed to oneself, no subject, no text) ------
+
+def test_a_day_is_the_users_whole_day_in_their_timezone(monkeypatch):
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    monkeypatch.setattr(gmail, "clock", lambda: datetime(2026, 10, 28, 20, 30, tzinfo=timezone.utc))
+    la, india = ZoneInfo("America/Los_Angeles"), ZoneInfo("Asia/Kolkata")
+    # 1:30 PM Oct 28 in California, but already 2 AM Oct 29 in India
+    assert gmail.day_bounds("yesterday", "America/Los_Angeles") == (
+        int(datetime(2026, 10, 27, tzinfo=la).timestamp()), int(datetime(2026, 10, 28, tzinfo=la).timestamp()))
+    assert gmail.day_bounds("today", "Asia/Kolkata")[0] == int(datetime(2026, 10, 29, tzinfo=india).timestamp())
+    assert gmail.day_bounds("2026-11-01", "America/Los_Angeles") == (  # the day clocks go back: 25 hours
+        int(datetime(2026, 11, 1, tzinfo=la).timestamp()), int(datetime(2026, 11, 2, tzinfo=la).timestamp()))
+
+
+def test_search_narrows_by_day_and_direction_in_code_and_shows_what_each_email_carries(monkeypatch):
+    from datetime import datetime, timezone
+    monkeypatch.setattr(gmail, "clock", lambda: datetime(2026, 10, 28, 20, 30, tzinfo=timezone.utc))
+    asked = []
+    photo_only = {"id": "h1", "snippet": "", "payload": {"mimeType": "multipart/related", "headers": [
+        {"name": "From", "value": "Neel <me@example.com>"}, {"name": "Subject", "value": ""}], "parts": [
+        {"mimeType": "text/html", "filename": "", "body": {"size": 40}},
+        {"mimeType": "image/jpeg", "filename": "", "body": {"size": 2_000_000, "attachmentId": "a1"}},
+        {"mimeType": "image/png", "filename": "logo.png", "body": {"size": 900, "attachmentId": "a2"}}]}}
+
+    def fake_request(method, url, service, ctx=None, params=None, **kwargs):
+        asked.append(params)
+        return {"messages": [{"id": "h1"}]} if url == gmail.API else photo_only
+    monkeypatch.setattr(gmail, "google_request", fake_request)
+    la = ToolContext(chat_id=1, tz="America/Los_Angeles")
+
+    found = gmail.search_emails(day="today", direction="sent", ctx=la)
+    start, end = gmail.day_bounds("today", "America/Los_Angeles")
+    assert asked[0]["q"] == f"from:me after:{start} before:{end}"
+    assert asked[1] == {"format": "full", "fields": gmail.SEARCH_FIELDS}  # structure and sizes, no content
+    [email] = found["emails"]
+    assert email["subject"] == "(no subject)" and email["attachments"] == "1 image"  # the logo isn't counted
+
+    gmail.search_emails("receipt", direction="received", ctx=la)
+    assert asked[2]["q"] == "receipt -from:me"
+    gmail.search_emails(ctx=la)
+    assert asked[4]["q"] == "is:unread newer_than:1d"  # nothing given: today's unread, as before
+    assert gmail.search_emails(direction="inbox")["error"] == "direction must be any, sent or received."
+    assert gmail.search_emails(day="last week")["error"].startswith("day must be")
+
+
+def test_if_gmail_refuses_the_structure_request_search_still_works_without_counts(monkeypatch):
+    def fake_request(method, url, service, ctx=None, params=None, **kwargs):
+        if url == gmail.API:
+            return {"messages": [{"id": "m1"}]}
+        if isinstance(params, dict) and "fields" in params:
+            return {"error": "Gmail: Invalid field selection"}
+        return {"id": "m1", "snippet": "Your order", "payload": {"headers": [{"name": "Subject", "value": "Order"}]}}
+    monkeypatch.setattr(gmail, "google_request", fake_request)
+    [email] = gmail.search_emails("order")["emails"]
+    assert email["subject"] == "Order" and "attachments" not in email
