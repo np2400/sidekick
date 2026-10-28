@@ -118,6 +118,18 @@ def search_emails(query: str = "", day: str = "", direction: str = "any", max_re
                           params={"q": full_query, "maxResults": min(max_results, MAX_RESULTS)})
     if "error" in data:
         return data
+    note = ""
+    narrowing = " ".join(t for t in terms[1:] if t)  # the day and direction, without the words
+    if query.strip() and narrowing and not data.get("messages"):
+        # The words found nothing, but day or direction narrow it: list those emails without the words (at most 15).
+        # Gmail can't search words inside an image (Oct 28: "the receipt I emailed myself today" was a photo).
+        full_query = narrowing
+        data = google_request("GET", API, "Gmail", ctx,
+                              params={"q": full_query, "maxResults": min(max_results, MAX_RESULTS)})
+        if "error" in data:
+            return data
+        note = (f"No email had the words '{query.strip()}', so these are all the emails for the day and direction "
+                "you asked (words inside images can't be searched): check their attachments.")
 
     emails = []
     for ref in data.get("messages", []):
@@ -142,7 +154,7 @@ def search_emails(query: str = "", day: str = "", direction: str = "any", max_re
         if carries := _contents(msg.get("payload", {})):
             email["attachments"] = carries
         emails.append(email)
-    return {"query": full_query, "count": len(emails), "emails": emails}
+    return {"query": full_query, "count": len(emails), "emails": emails, **({"note": note} if note else {})}
 
 
 def _find_text(part: dict, mime: str) -> str:

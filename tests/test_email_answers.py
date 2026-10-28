@@ -208,3 +208,27 @@ def test_if_gmail_refuses_the_structure_request_search_still_works_without_count
     monkeypatch.setattr(gmail, "google_request", fake_request)
     [email] = gmail.search_emails("order")["emails"]
     assert email["subject"] == "Order" and "attachments" not in email
+
+
+def test_when_the_words_find_nothing_that_days_emails_are_listed_without_them(monkeypatch):
+    """Oct 28, 1:39 PM: four searches with 'receipt' missed a photo-only email the user sent themselves that day."""
+    from datetime import datetime, timezone
+    monkeypatch.setattr(gmail, "clock", lambda: datetime(2026, 10, 28, 20, 30, tzinfo=timezone.utc))
+    asked = []
+
+    def fake_request(method, url, service, ctx=None, params=None, **kwargs):
+        if url == gmail.API:
+            asked.append(params["q"])
+            return {} if "receipt" in params["q"] else {"messages": [{"id": "h1"}]}  # words never match a photo
+        return {"id": "h1", "snippet": "", "payload": {"headers": [], "parts": [
+            {"mimeType": "image/jpeg", "filename": "", "body": {"size": 1_208_250, "attachmentId": "a1"}}]}}
+    monkeypatch.setattr(gmail, "google_request", fake_request)
+    la = ToolContext(chat_id=1, tz="America/Los_Angeles")
+    start, end = gmail.day_bounds("today", "America/Los_Angeles")
+
+    found = gmail.search_emails("receipt", day="today", direction="sent", ctx=la)
+    assert asked == [f"receipt from:me after:{start} before:{end}", f"from:me after:{start} before:{end}"]
+    assert found["emails"][0]["attachments"] == "1 image" and "words inside images" in found["note"]
+
+    asked.clear()  # no day or direction: nothing narrows it, so no listing of everything
+    assert gmail.search_emails("receipt", ctx=la)["count"] == 0 and asked == ["receipt"]
