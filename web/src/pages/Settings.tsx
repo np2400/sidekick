@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { getPreferences, getSession, setTelegramNotifications, signOut } from "../api";
+import { getPreferences, getSession, saveBriefSettings, setTelegramNotifications, signOut, type Preferences } from "../api";
 import { PageHeader, PreviewPill, TelegramHint } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
 import Notifications from "../components/Notifications";
@@ -30,6 +30,66 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       <h2>{title}</h2>
       {children}
     </section>
+  );
+}
+
+const EXAMPLES = "e.g. Job hunting for engineering roles · family visits in December · orders for my bakery";
+
+/** When the brief comes (or off), what matters to this person, and the kinds of automated email it may use. */
+function BriefSettings({ initial }: { initial: Preferences }) {
+  const [on, setOn] = useState(initial.brief_time !== null);
+  const [time, setTime] = useState(initial.brief_time ?? "08:00");
+  const [interests, setInterests] = useState(initial.brief.interests);
+  const [hidden, setHidden] = useState<string[]>(initial.brief.hidden);
+  const [status, setStatus] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    const result = await saveBriefSettings(on ? time : "off", interests, hidden);
+    setSaving(false);
+    setStatus(result.state === "ready" ? "Saved. Your next brief uses it."
+      : result.state === "unavailable" ? result.reason : "Sign in again, then save once more.");
+  }
+  const toggle = (key: string, shown: boolean) =>
+    setHidden((now) => (shown ? now.filter((k) => k !== key) : [...now, key]));
+
+  return (
+    <div className="brief-settings" onChange={() => setStatus(null)}>
+      <Row icon="sunrise" title="Morning brief"
+        body="Your day in a few lines: calendar, what needs you, and what matters to you."
+        control={<label className="switch"><input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} />
+          <span aria-hidden="true" /><span className="sr-only">Send me a morning brief</span></label>} />
+      {on && (
+        <label className="brief-field">
+          <span className="setting-title">Time</span>
+          <input type="time" className="text-input" value={time} required onChange={(e) => setTime(e.target.value)} />
+        </label>
+      )}
+      <label className="brief-field">
+        <span className="setting-title">What matters to you</span>
+        <span className="muted small">Its "For you" picks at most two things that match. Leave it empty and it only
+          mentions something time-sensitive, like a delivery today or a bill due.</span>
+        <textarea className="text-input" rows={3} maxLength={initial.brief.max_interests} placeholder={EXAMPLES}
+          value={interests} onChange={(e) => setInterests(e.target.value)} />
+        <span className="muted small counter">{interests.length}/{initial.brief.max_interests}</span>
+      </label>
+      <fieldset className="brief-field">
+        <legend className="setting-title">Automated email it may use</legend>
+        <span className="muted small">Emails from people always count. These only feed "For you", never "Needs
+          attention".</span>
+        {Object.entries(initial.brief.categories).map(([key, label]) => (
+          <label key={key} className="check">
+            <input type="checkbox" checked={!hidden.includes(key)} onChange={(e) => toggle(key, e.target.checked)} />
+            {label}
+          </label>
+        ))}
+      </fieldset>
+      <div className="brief-save">
+        <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+        {status && <span className="muted small" role="status">{status}</span>}
+      </div>
+    </div>
   );
 }
 
@@ -87,13 +147,14 @@ export default function Settings() {
           control={<ThemeSwitch showLabels />} />
       </Section>
 
+      <Section title="Morning brief">
+        {values ? <BriefSettings initial={values} /> : <p className="muted small brief-field">Loading…</p>}
+      </Section>
+
       <Section title="Preferences">
         <Row icon="globe" title={`Timezone${values ? `: ${values.timezone}` : ""}`}
           body={<>So "remind me at 9" means 9 where you are. <TelegramHint>/timezone</TelegramHint></>}
           control={<Unavailable label="Change" />} />
-        <Row icon="sunrise" title={`Morning brief${values ? `: ${values.brief_time ?? "off"}` : ""}`}
-          body={<>A summary of your day, at a time you choose. <TelegramHint>/brieftime 7:30</TelegramHint></>}
-          control={<Unavailable label="Set time" />} />
       </Section>
 
       <Section title="Privacy and data">

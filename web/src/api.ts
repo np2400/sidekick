@@ -31,11 +31,14 @@ export type JobStatus = { status: "waiting" | "done" | "failed" };
 export type Reminder = { id: number; text: string; next: string; repeat: string };
 export type Task = { id: number; title: string; due: string | null };
 export type Tasks = { tasks: Task[]; elsewhere?: string };
-export type Brief = { date: string; text: string };
+export type LatestBrief = { text: string; made_at: string };
+/** Each person's own: what matters to them (their words), and the kinds of automated email "For you" leaves out. */
+export type BriefPrefs = { interests: string; hidden: string[]; categories: Record<string, string>; max_interests: number };
 export type GoogleLink = { managed: "server" | "you"; calendar: boolean; gmail: boolean; email: string | null };
 export type Connections = { google: GoogleLink; telegram: boolean; sign_in: string | null };
 export type Preferences = {
   timezone: string; brief_time: string | null;
+  brief: BriefPrefs;
   telegram: boolean;                 // linked to Telegram
   telegram_notifications: boolean;   // reminders and the brief also go there
 };
@@ -117,6 +120,10 @@ async function post<T>(path: string, body?: object, method = "POST", patient = f
     }
   }
   if (response.status === 401) return { state: "signed_out" };
+  if (response.status === 422 || response.status === 429) {  // the server's own words say what to change
+    const detail = await response.clone().json().then((b) => b.detail, () => null);
+    if (typeof detail === "string") return unavailable(detail);
+  }
   if (!response.ok) {
     return unavailable(PROBLEMS[response.status] ?? `Sidekick couldn't do that (error ${response.status}). Try again soon.`);
   }
@@ -173,9 +180,13 @@ export const setTelegramNotifications = (on: boolean) =>
 export const CONVERSATIONS_CHANGED = "sidekick:conversations-changed";
 export const conversationsChanged = () => window.dispatchEvent(new Event(CONVERSATIONS_CHANGED));
 
-export async function getBrief(): Promise<Result<Brief>> {
-  return unavailable("Your morning brief comes to the web in a later step.", "/brief");
-}
+/** The latest brief (this morning's, or one made with "Make my brief now"). */
+export const getBrief = () => get<{ latest: LatestBrief | null }>("brief");
+/** Build one now: a few seconds (email, then one AI call). At most once a minute. */
+export const makeBrief = () => post<{ latest: LatestBrief }>("brief");
+/** time: "07:30" or "off". */
+export const saveBriefSettings = (time: string, interests: string, hidden: string[]) =>
+  post<Preferences>("settings/brief", { time, interests, hidden });
 
 /** Sign out this browser. The server checks the request comes from Sidekick's own page (Origin). */
 export async function signOut(): Promise<void> {
