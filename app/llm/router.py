@@ -23,7 +23,8 @@ RETRY_SAME = {"overloaded", "network", "bad_generation"}
 # Groq's free limits are per minute, so a rate-limited model is benched for a minute, not the full cooldown.
 RATE_LIMIT_COOLDOWN = 60
 # Non-Gemini models that accept images, checked live (2026-10-24). Gemini models all do; GPT-OSS doesn't.
-VISION_MODELS = {"groq:qwen/qwen3.8-27b"}
+# Gemini through OpenRouter too (its model list says image input, 2026-10-27).
+VISION_MODELS = {"groq:qwen/qwen3.8-27b", "openrouter:google/gemini-3.1-flash-lite"}
 
 # USD per 1M tokens (input, output), paid tier, from Google's pricing page (Oct 2026; 3.8 rises Jan 2027).
 # Unknown prices stay unknown: cost is reported as null rather than guessed. Free tier actually costs $0.

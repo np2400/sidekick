@@ -79,12 +79,15 @@ LLM_CANDIDATES = os.getenv("LLM_CANDIDATES") or (
 )
 # Order for messages with a photo (only models that can see). Gemini first: on the same photo it was right
 # 5/5 vs Qwen 1/4 (2026-10-24). Trade-off: Google's free tier may use content to improve its products.
+# Then Gemini 3.1 Flash-Lite through OpenRouter (paid, about $0.003 a photo, hosts that keep nothing; 3.8 Flash was
+# about a cent): on Oct 27 a member's photo got "overloaded" once the free models were used up.
 LLM_VISION_CANDIDATES = os.getenv("LLM_VISION_CANDIDATES") or (
-    "gemini:gemini-3.5-flash,groq:qwen/qwen3.8-27b,gemini:gemini-3.8-flash"
+    "gemini:gemini-3.5-flash,openrouter:google/gemini-3.1-flash-lite,groq:qwen/qwen3.8-27b,gemini:gemini-3.8-flash"
 )
 # Smaller models that don't answer once private content (email) is involved: their answers to booking questions
 # were the weakest (Oct 27 traces). With no other model free, the honest "try again in a minute" comes instead.
 LLM_NOT_FOR_PRIVATE = {m.strip() for m in (os.getenv("LLM_NOT_FOR_PRIVATE") or
-                       "gemini:gemini-3.5-flash-lite,gemini:gemini-3.1-flash-lite").split(",") if m.strip()}
+                       "gemini:gemini-3.5-flash-lite,gemini:gemini-3.1-flash-lite,openrouter:google/gemini-3.1-flash-lite"
+                       ).split(",") if m.strip()}
 # Providers that must NOT see sensitive content (email bodies/previews), e.g. "groq". Empty = all allowed.
 LLM_BLOCK_SENSITIVE = {p.strip() for p in os.getenv("LLM_BLOCK_SENSITIVE", "").split(",") if p.strip()}

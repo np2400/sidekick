@@ -58,7 +58,7 @@ def test_pdf_attachments_are_read_and_other_files_are_listed(mailbox):
 
 def test_broken_or_oversized_pdfs_get_a_note_instead_of_crashing(mailbox):
     mailbox["attachments"]["att-pdf"] = b"%PDF-1.4 this is not really a pdf"
-    assert gmail.read_email("m9")["attachments"][0]["note"] == "couldn't read this PDF"
+    assert gmail.read_email("m9")["attachments"][0]["note"].startswith("couldn't read this PDF")
 
     mailbox["message"]["payload"]["parts"][1]["body"]["size"] = gmail.MAX_PDF_BYTES + 1
     assert gmail.read_email("m9")["attachments"][0]["note"] == "not read (too large)"
@@ -68,3 +68,18 @@ def test_attachment_text_has_a_budget(mailbox, monkeypatch):
     monkeypatch.setattr(gmail, "MAX_ATTACHMENT_TEXT", 20)
     pdf = gmail.read_email("m9")["attachments"][0]
     assert len(pdf["text"]) == 20 and pdf["truncated"] is True
+
+
+def test_a_pdf_labelled_as_a_generic_file_is_still_read(mailbox):
+    """Some senders attach PDFs as application/octet-stream: the .pdf name and the %PDF bytes decide."""
+    mailbox["message"]["payload"]["parts"][1]["mimeType"] = "application/octet-stream"
+    assert "Hotel Snow Lion" in gmail.read_email("m9")["attachments"][0]["text"]
+
+    mailbox["attachments"]["att-pdf"] = b"PK\x03\x04 a zip file wearing a .pdf name"
+    assert gmail.read_email("m9")["attachments"][0]["note"] == "not read (named .pdf but isn't a PDF)"
+
+
+def test_a_pdf_whose_pages_are_pictures_says_so_instead_of_returning_empty_text(mailbox):
+    mailbox["attachments"]["att-pdf"] = tiny_pdf("")
+    pdf = gmail.read_email("m9")["attachments"][0]
+    assert "text" not in pdf and pdf["note"].startswith("no text in this PDF")

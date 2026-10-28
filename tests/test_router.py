@@ -203,3 +203,8 @@ def test_avoiding_every_model_fails_cleanly():
     router, _ = make([FakeAdapter("groq")], [B])
     with pytest.raises(AllProvidersFailed):
         router.complete(MSG, [], "", avoid=frozenset({B.key}))
+
+
+def test_gemini_through_openrouter_can_take_photos_but_gpt_oss_cannot():
+    cs = parse_candidates("openrouter:google/gemini-3.1-flash-lite,openrouter:openai/gpt-oss-120b", set())
+    assert [c.vision for c in cs] == [True, False]

@@ -88,7 +88,8 @@ def _attachments(message_id: str, payload: dict, ctx) -> list[dict]:
     for part in _attachment_parts(payload):
         item = {"filename": part["filename"]}
         body = part.get("body", {})
-        if part.get("mimeType") != "application/pdf":
+        # Some senders label a PDF as a generic file (application/octet-stream): the name tells, the bytes confirm.
+        if part.get("mimeType") != "application/pdf" and not part["filename"].lower().endswith(".pdf"):
             item["note"] = "not read (only PDFs are)"
         elif body.get("size", 0) > MAX_PDF_BYTES:
             item["note"] = "not read (too large)"
@@ -99,14 +100,25 @@ def _attachments(message_id: str, payload: dict, ctx) -> list[dict]:
             if not data and body.get("attachmentId"):  # bigger attachments are fetched separately
                 fetched = google_request("GET", f"{API}/{message_id}/attachments/{body['attachmentId']}", "Gmail", ctx)
                 data = fetched.get("data")
+            raw = base64.urlsafe_b64decode(data or "")
             try:
-                text = pdf_text(base64.urlsafe_b64decode(data or ""))
-                item["text"], budget = text[:budget], budget - len(text)
-                if len(text) > len(item["text"]):
-                    item["truncated"] = True
+                text = pdf_text(raw) if raw.startswith(b"%PDF") else None
             except Exception as exc:  # broken, encrypted or odd PDFs: say so, never crash the agent
                 log.warning("Couldn't read a PDF attachment: %s", type(exc).__name__)
-                item["note"] = "couldn't read this PDF"
+                item["note"] = "couldn't read this PDF (damaged or password-protected)"
+            else:
+                if text is None:
+                    item["note"] = "not read (named .pdf but isn't a PDF)"
+                elif not text:  # pages that are pictures (a scan, a ticket image): no text to read
+                    item["note"] = ("no text in this PDF (its pages are images, e.g. a scan), so it can't be read; "
+                                    "look for the details in the email text or another email")
+                else:
+                    item["text"], budget = text[:budget], budget - len(text)
+                    if len(text) > len(item["text"]):
+                        item["truncated"] = True
+            # Metadata only (never the name or text): enough to tell why a PDF went unread.
+            log.info("PDF attachment: %s, type %s, %d bytes", "read" if "text" in item else item["note"][:40],
+                     part.get("mimeType"), len(raw))
         out.append(item)
     return out
 
