@@ -22,6 +22,7 @@ const MAX_PHOTO_MB = 25;  // before it's made smaller here
 const MAX_PDF_MB = 5;     // the server's limit too (app/web_api.py)
 const MAX_SIDE = 1600;    // a photo's longest side once made smaller: plenty for reading text in it
 const SLOW_MS = 20_000;  // after this, say that long answers (web search, email) take a while
+const GIVE_UP_MS = 90_000;  // can't reach Sidekick for this long: stop waiting and show what's wrong
 
 /** A photo as a smaller JPEG, in base64. Drawing it anew also leaves out hidden details (like where it was taken). */
 async function shrink(file: File): Promise<string> {
@@ -133,9 +134,18 @@ function Thread({ id, version, onView }: { id: string; version: number; onView: 
     const started = Date.now();
     let alive = true;
     let timer: number | undefined;
+    let trouble: number | null = null;  // when checking started failing (e.g. a deploy restarting Sidekick)
     const check = async () => {
       const states = await Promise.all(jobs.map(jobStatus));
       if (!alive) return;
+      // Can't ask right now: the message is safe in the queue, so keep asking for a while instead of showing an
+      // error (Oct 28: one check during a deploy showed "error 502" though the answer came moments later).
+      const unreachable = states.some((s) => s.state === "unavailable");
+      trouble = unreachable ? trouble ?? Date.now() : null;
+      if (unreachable && Date.now() - trouble! < GIVE_UP_MS) {
+        timer = window.setTimeout(check, 3000);
+        return;
+      }
       if (states.some((s) => s.state !== "ready" || s.data.status !== "waiting")) {
         setSlow(false);
         await load();

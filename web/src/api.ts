@@ -86,7 +86,11 @@ const PROBLEMS: Record<number, string> = {
   422: "Sidekick couldn't take that message: it's too long (4,000 characters at most), or the file isn't a real photo or PDF.",
 };
 
-async function post<T>(path: string, body?: object, method = "POST"): Promise<Result<T>> {
+// Answered by the front door while Sidekick restarts (a deploy takes a few seconds): worth asking again.
+const RESTARTING = new Set([502, 503, 504]);
+const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+async function post<T>(path: string, body?: object, method = "POST", patient = false): Promise<Result<T>> {
   const init: RequestInit = {
     method, credentials: "same-origin",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
@@ -100,6 +104,16 @@ async function post<T>(path: string, body?: object, method = "POST"): Promise<Re
       response = await fetch(`/api/${path}`, init);
     } catch {
       return unavailable("Can't reach Sidekick right now. Check your connection and try again.");
+    }
+  }
+  // `patient`: the same request again while Sidekick restarts (a message's request id makes a repeat harmless)
+  for (const pause of patient ? [2000, 4000, 8000, 12000] : []) {
+    if (!RESTARTING.has(response.status)) break;
+    await wait(pause);
+    try {
+      response = await fetch(`/api/${path}`, init);
+    } catch {
+      continue;
     }
   }
   if (response.status === 401) return { state: "signed_out" };
@@ -124,8 +138,8 @@ function requestId(): string {
 export function sendMessage(conversationId: number | null, text: string,
                             attachment?: Attached & { data: string }): Promise<Result<Sent>> {
   const body = { text, request_id: requestId(), ...(attachment ? { attachment } : {}) };
-  return conversationId === null ? post<Sent>("conversations", body)
-    : post<Sent>(`conversations/${conversationId}/messages`, body);
+  return conversationId === null ? post<Sent>("conversations", body, "POST", true)
+    : post<Sent>(`conversations/${conversationId}/messages`, body, "POST", true);
 }
 
 export const jobStatus = (jobId: number) => get<JobStatus>(`jobs/${jobId}`);
