@@ -220,3 +220,30 @@ def test_with_the_default_settings_the_paid_photo_backup_answers_a_photo_when_fr
     photo = [Message("user", text="dates?", images=[Image(data=b"\xff\xd8", mime="image/jpeg")])]
     answer = router.complete(photo, [], "sys", sensitive=True)
     assert (answer.provider, answer.model) == ("openrouter", "google/gemini-3.1-flash-lite")
+
+
+def test_a_pdf_goes_only_to_models_that_read_pdfs_while_a_photo_may_go_to_qwen():
+    from app.llm.types import Image
+    vision = parse_candidates("groq:qwen/qwen3.8-27b,openrouter:google/gemini-3.1-flash-lite", set())
+    router = Router([], {"groq": FakeAdapter("groq"), "openrouter": FakeAdapter("openrouter")},
+                    vision_candidates=vision, sleep=lambda s: None)
+    scan = [Message("user", text="ticket?", images=[Image(mime="application/pdf", data=b"%PDF-1.4")])]
+    answer = router.complete(scan, [], "sys")
+    assert answer.provider == "openrouter" and answer.attempts[0].kind == "no_pdf"
+    photo = [Message("user", text="ticket?", images=[Image(mime="image/png", data=b"\x89PNG")])]
+    assert router.complete(photo, [], "sys").provider == "groq"
+
+
+def test_with_the_default_settings_an_emails_image_goes_to_the_model_that_keeps_nothing_first():
+    """Owner's choice (Oct 28): tickets can show passport details, so an email's image skips free Gemini when the paid
+    model whose hosts keep nothing is up. The user's own photos keep the free-first order."""
+    from app.config import LLM_BLOCK_SENSITIVE, LLM_EMAIL_VISION_CANDIDATES, LLM_NOT_FOR_PRIVATE, LLM_VISION_CANDIDATES
+    from app.llm.types import Image
+    router = Router([], {"gemini": FakeAdapter("gemini"), "openrouter": FakeAdapter("openrouter")},
+                    vision_candidates=parse_candidates(LLM_VISION_CANDIDATES, LLM_BLOCK_SENSITIVE, LLM_NOT_FOR_PRIVATE),
+                    email_vision_candidates=parse_candidates(LLM_EMAIL_VISION_CANDIDATES, LLM_BLOCK_SENSITIVE,
+                                                             LLM_NOT_FOR_PRIVATE), sleep=lambda s: None)
+    ticket = [Message("user", text="seat?", images=[Image("image/png", b"png", from_email=True)])]
+    photo = [Message("user", text="what's this?", images=[Image("image/jpeg", b"jpg")])]
+    assert router.complete(ticket, [], "sys", sensitive=True).provider == "openrouter"
+    assert router.complete(photo, [], "sys", sensitive=True).provider == "gemini"

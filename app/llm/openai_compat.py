@@ -36,8 +36,11 @@ class OpenAICompatAdapter:
         out = [{"role": "system", "content": system}]
         for m in messages:
             if m.role == "user" and m.images:
-                # A photo travels inline as a data URL next to the text.
+                # A photo travels inline as a data URL next to the text; a PDF as a file (OpenRouter's format).
                 out.append({"role": "user", "content": [{"type": "text", "text": m.text}] + [
+                    {"type": "file", "file": {"filename": "attachment.pdf",
+                                              "file_data": f"data:{i.mime};base64,{b64(i.data)}"}}
+                    if i.mime == "application/pdf" else
                     {"type": "image_url", "image_url": {"url": f"data:{i.mime};base64,{b64(i.data)}"}}
                     for i in m.images]})
             elif m.role == "user":

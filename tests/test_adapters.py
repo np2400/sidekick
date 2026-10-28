@@ -200,3 +200,31 @@ def test_groq_parsing_failure_is_classified_as_bad_generation():
     with pytest.raises(ProviderError) as exc:
         groq(FakeServer((400, body))).complete("openai/gpt-oss-120b", [Message("user", text="hi")], TOOLS, "s", 10)
     assert exc.value.kind == "bad_generation"
+
+
+def test_a_pdf_travels_as_a_file_and_openrouter_reads_it_with_gemini_itself():
+    from app.llm.types import Image
+    server = FakeServer((200, openai_reply("hi")))
+    adapter = OpenAICompatAdapter("openrouter", "https://openrouter.ai/api/v1", "OKEY", client(server),
+                                  extra_body=openrouter_extras)
+    scan = Message("user", text="ticket?", images=[Image(mime="application/pdf", data=b"%PDF-1.4")])
+    adapter.complete("google/gemini-3.1-flash-lite", [scan], [], "", 10)
+
+    body = server.body()
+    assert body["messages"][1]["content"][1] == {"type": "file", "file": {
+        "filename": "attachment.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQ="}}
+    assert body["plugins"] == [{"id": "file-parser", "pdf": {"engine": "native"}}]  # not a paid OCR service
+    assert "plugins" not in openrouter_extras("openai/gpt-oss-120b")
+
+
+def test_an_email_image_after_another_models_step_joins_that_user_turn_for_gemini():
+    from app.llm.types import Image
+    history = [Message("user", text="seat?"),
+               Message("assistant", tool_calls=[ToolCall("o1", "view_attachment", {"attachment": 2})],
+                       provider="openrouter"),
+               Message("tool", tool_call_id="o1", tool_name="view_attachment", result={"summary": "image follows"}),
+               Message("user", text="(From Sidekick) the image", images=[Image(mime="image/png", data=b"png")])]
+    contents = GeminiAdapter("KEY", client(FakeServer())).to_contents(history)
+    assert [c["role"] for c in contents] == ["user", "model", "user"]
+    assert contents[-1]["parts"][0]["text"].startswith("[Result of view_attachment]")
+    assert contents[-1]["parts"][-1] == {"inlineData": {"mimeType": "image/png", "data": "cG5n"}}

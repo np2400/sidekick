@@ -27,7 +27,12 @@ class GeminiAdapter:
             if m.role == "user":
                 photos = [{"inlineData": {"mimeType": i.mime, "data": base64.b64encode(i.data).decode()}}
                           for i in m.images]
-                contents.append({"role": "user", "parts": [{"text": m.text}] + photos})
+                parts = [{"text": m.text}] + photos
+                last = contents[-1] if contents else None
+                if last and last["role"] == "user" and not any("functionResponse" in p for p in last["parts"]):
+                    last["parts"] += parts  # e.g. an email's image right after another model's step: one user turn
+                else:
+                    contents.append({"role": "user", "parts": parts})
             elif m.role == "assistant" and m.provider == self.name and m.raw:
                 contents.append(m.raw)  # our own turn: send back verbatim (keeps thought signatures intact)
             elif m.role == "assistant":

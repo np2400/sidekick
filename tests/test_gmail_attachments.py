@@ -25,6 +25,9 @@ def tiny_pdf(text: str) -> bytes:
     return out + b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, xref)
 
 
+JPEG = b"\xff\xd8\xff\xe0" + b"photo" * 10_000  # 50 KB: the size Gmail reports for map.jpg
+
+
 def b64(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode()
 
@@ -32,7 +35,8 @@ def b64(data: bytes) -> str:
 @pytest.fixture
 def mailbox(monkeypatch):
     """A fake Gmail: one email with a text body, a PDF voucher (fetched separately) and a photo."""
-    attachments = {"att-pdf": tiny_pdf("Hotel Snow Lion, Tawang. Check-in Dec 12, check-out Dec 14.")}
+    attachments = {"att-pdf": tiny_pdf("Hotel Snow Lion, Tawang. Check-in Dec 12, check-out Dec 14."),
+                   "att-jpg": JPEG}
     message = {"id": "m9", "payload": {"mimeType": "multipart/mixed", "headers": [
         {"name": "From", "value": "Himalayan Trails <tours@trails.example>"},
         {"name": "Subject", "value": "Your Arunachal itinerary"}], "parts": [
@@ -53,7 +57,7 @@ def test_pdf_attachments_are_read_and_other_files_are_listed(mailbox):
     assert email["body"] == "Please find your vouchers attached."
     pdf, photo = email["attachments"]
     assert pdf["filename"] == "vouchers.pdf" and "Hotel Snow Lion, Tawang" in pdf["text"]
-    assert photo == {"filename": "map.jpg", "note": "not read (only PDFs are)"}
+    assert photo == {"attachment": 2, "filename": "map.jpg", "note": f"an image: {gmail.LOOK}"}
 
 
 def test_broken_or_oversized_pdfs_get_a_note_instead_of_crashing(mailbox):
@@ -83,3 +87,43 @@ def test_a_pdf_whose_pages_are_pictures_says_so_instead_of_returning_empty_text(
     mailbox["attachments"]["att-pdf"] = tiny_pdf("")
     pdf = gmail.read_email("m9")["attachments"][0]
     assert "text" not in pdf and pdf["note"].startswith("no text in this PDF")
+
+
+# --- Images, and PDFs whose pages are images (look at them with view_attachment) ------------------------------------
+
+def test_images_pasted_into_the_body_are_listed_but_logos_are_not_offered(mailbox):
+    parts = mailbox["message"]["payload"]["parts"]
+    parts.append({"mimeType": "image/png", "filename": "", "body": {"attachmentId": "att-ticket", "size": 80_000}})
+    parts.append({"mimeType": "image/png", "filename": "logo.png", "body": {"attachmentId": "att-logo", "size": 900}})
+    parts.append({"mimeType": "application/zip", "filename": "photos.zip", "body": {"attachmentId": "z", "size": 9}})
+    *_, ticket, logo, archive = gmail.read_email("m9")["attachments"]
+    assert ticket == {"attachment": 3, "filename": "image 3 in the email", "note": f"an image: {gmail.LOOK}"}
+    assert logo["note"] == "not shown (a small image, like a logo)"
+    assert archive["note"] == "not read (only PDFs and images are)"
+
+
+def test_view_attachment_returns_the_image_itself_not_text(mailbox):
+    shown = gmail.view_attachment("m9", 2)
+    assert shown["summary"].startswith("map.jpg") and len(shown["_images"]) == 1
+    assert shown["_images"][0].mime == "image/jpeg" and shown["_images"][0].data == JPEG
+    assert shown["_images"][0].from_email  # routed to the model that keeps nothing first
+
+    assert gmail.view_attachment("m9", 7)["error"] == "That email has no attachment 7 (it has 2)."
+    mailbox["message"]["payload"]["parts"][2]["body"]["size"] = 500  # a logo
+    assert "logo-sized" in gmail.view_attachment("m9", 2)["error"]
+
+
+def test_a_pdf_whose_pages_are_images_is_offered_and_shown_as_a_pdf_of_at_most_six_pages(mailbox):
+    import io
+
+    from pypdf import PdfReader, PdfWriter
+    writer = PdfWriter()
+    for _ in range(9):
+        writer.add_blank_page(612, 792)  # no text: like a scanned ticket
+    scan = io.BytesIO()
+    writer.write(scan)
+    mailbox["attachments"]["att-pdf"] = scan.getvalue()
+
+    assert gmail.read_email("m9")["attachments"][0]["note"] == f"no text in this PDF (its pages are images, e.g. a scan): {gmail.LOOK}"
+    [pdf] = gmail.view_attachment("m9", 1)["_images"]
+    assert pdf.mime == "application/pdf" and len(PdfReader(io.BytesIO(pdf.data)).pages) == gmail.MAX_PDF_PAGES

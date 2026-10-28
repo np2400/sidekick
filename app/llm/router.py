@@ -9,8 +9,8 @@ import logging
 import time
 from dataclasses import dataclass
 
-from app.config import (GEMINI_API_KEY, GROQ_API_KEY, LLM_BLOCK_SENSITIVE, LLM_CANDIDATES, LLM_NOT_FOR_PRIVATE,
-                        LLM_VISION_CANDIDATES, OPENROUTER_API_KEY)
+from app.config import (GEMINI_API_KEY, GROQ_API_KEY, LLM_BLOCK_SENSITIVE, LLM_CANDIDATES,
+                        LLM_EMAIL_VISION_CANDIDATES, LLM_NOT_FOR_PRIVATE, LLM_VISION_CANDIDATES, OPENROUTER_API_KEY)
 from app.llm.gemini import GeminiAdapter
 from app.llm.openai_compat import OpenAICompatAdapter
 from app.llm.types import Attempt, LLMResponse, Message, ProviderError, ToolSpec
@@ -64,6 +64,11 @@ class Candidate:
     def key(self) -> str:
         return f"{self.provider}:{self.model}"
 
+    @property
+    def reads_pdf(self) -> bool:
+        """A PDF whose pages are images goes to the model as a file: Gemini reads those, directly or via OpenRouter."""
+        return self.provider == "gemini" or (self.provider == "openrouter" and self.model.startswith("google/"))
+
 
 class AllProvidersFailed(Exception):
     def __init__(self, attempts: list[Attempt]):
@@ -79,9 +84,11 @@ class AllProvidersFailed(Exception):
 class Router:
     def __init__(self, candidates: list[Candidate], adapters: dict, cooldown: float = 300,
                  retry_wait: float = 2.0, sleep=time.sleep, clock=time.time,
-                 vision_candidates: list[Candidate] | None = None):
+                 vision_candidates: list[Candidate] | None = None,
+                 email_vision_candidates: list[Candidate] | None = None):
         self.candidates = candidates
         self.vision_candidates = vision_candidates or []  # own order for photos; empty = same list as text
+        self.email_vision_candidates = email_vision_candidates or []  # for an email's images; empty = as photos
         self.adapters = adapters
         self.cooldown = cooldown
         self.retry_wait = retry_wait
@@ -93,7 +100,10 @@ class Router:
         """`avoid`: models (provider:model) not to use for this request, e.g. one that answered but ignored its
         tools (see app/agent.py, ungrounded). They aren't benched: it's about this request, not their health."""
         has_images = any(m.images for m in messages)
+        has_pdf = any(i.mime == "application/pdf" for m in messages for i in m.images)
         candidates = self.vision_candidates if has_images and self.vision_candidates else self.candidates
+        if self.email_vision_candidates and any(i.from_email for m in messages for i in m.images):
+            candidates = self.email_vision_candidates
         attempts: list[Attempt] = []
         eligible = []
         for c in (c for c in candidates if c.provider in self.adapters):
@@ -104,6 +114,8 @@ class Router:
                 attempts.append(Attempt(c.key, "privacy_blocked"))
             elif has_images and not c.vision:
                 attempts.append(Attempt(c.key, "no_vision"))
+            elif has_pdf and not c.reads_pdf:
+                attempts.append(Attempt(c.key, "no_pdf"))
             else:
                 eligible.append(c)
         if not eligible:
@@ -158,7 +170,10 @@ def groq_extras(model: str) -> dict:
 def openrouter_extras(model: str) -> dict:
     # OpenRouter passes a request on to one of several hosts. Only hosts that don't keep the request (zero data
     # retention) and don't train on it may take it; if none is up, it fails and the next candidate answers.
-    return {"provider": {"data_collection": "deny", "zdr": True}}
+    extras = {"provider": {"data_collection": "deny", "zdr": True}}
+    if model.startswith("google/"):  # Gemini reads a PDF itself; without this, OpenRouter may use a paid OCR service
+        extras["plugins"] = [{"id": "file-parser", "pdf": {"engine": "native"}}]
+    return extras
 
 
 @functools.cache
@@ -177,4 +192,6 @@ def default_router() -> Router:
     if missing:
         log.info("No API key for %s: those candidates are skipped", ", ".join(missing))
     return Router(candidates, adapters,
-                  vision_candidates=parse_candidates(LLM_VISION_CANDIDATES, LLM_BLOCK_SENSITIVE, LLM_NOT_FOR_PRIVATE))
+                  vision_candidates=parse_candidates(LLM_VISION_CANDIDATES, LLM_BLOCK_SENSITIVE, LLM_NOT_FOR_PRIVATE),
+                  email_vision_candidates=parse_candidates(LLM_EMAIL_VISION_CANDIDATES, LLM_BLOCK_SENSITIVE,
+                                                           LLM_NOT_FOR_PRIVATE))

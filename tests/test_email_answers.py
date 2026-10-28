@@ -109,3 +109,41 @@ def test_the_html_copy_is_read_when_the_plain_copy_is_only_a_link(monkeypatch):
 
     message["payload"]["parts"][0]["body"]["data"] = b64("Your order: Medium Pepperoni $14.99, Total $23.45. Thanks!")
     assert gmail.read_email("m1")["body"].startswith("Your order:")  # a plain copy that says as much is kept
+
+
+def test_an_image_from_an_email_reaches_the_model_as_a_picture_never_as_text():
+    """view_attachment returns bytes; the loop passes them on as a picture after the tool results, so the router
+    can pick a model that sees, and the trace and logs only ever get the summary."""
+    from app.llm.types import Image
+    ticket = Image(mime="image/png", data=b"\x89PNG ticket")
+    looked = []
+
+    def view_attachment(message_id: str, attachment: int) -> dict:
+        looked.append((message_id, attachment))
+        return {"summary": "image 2 in the email follows as an image for you to look at.", "_images": [ticket]}
+    llm = ScriptedProvider([call("view_attachment", message_id="m1", attachment=2)],
+                           [text("Your seat is 14C, boarding at 7:40 AM.")])
+    result = run_agent("What's my seat?", CTX, llm=llm, tools={"view_attachment": view_attachment})
+
+    assert looked == [("m1", 2)] and result.reply == "Your seat is 14C, boarding at 7:40 AM."
+    *_, tool, shown = llm.received[1]
+    assert tool.role == "tool" and "_images" not in tool.result  # no bytes in the result (or the trace and logs)
+    assert shown.role == "user" and shown.images == [ticket] and "not the user" in shown.text
+    assert llm.sensitive_flags[1] is True  # private content: only models allowed to see email
+
+
+def test_a_tool_whose_budget_is_used_up_is_no_longer_offered(world):
+    """Oct 28: search, read, search, search, a 4th search refused, step limit. Without search on offer, it answers."""
+    llm = ScriptedProvider(*[[call("search_emails", query=f"pizza {i}")] for i in range(TOOL_BUDGET["search_emails"])],
+                           [text("You spent $11.31 on Oct 25.")])
+    offered = []
+    original = llm.__call__
+
+    def watching(messages, tools=None, system="", sensitive=False, avoid=frozenset()):
+        offered.append({t.name for t in tools})
+        return original(messages, tools, system, sensitive, avoid)
+    result = run_agent("pizza spend?", CTX, llm=watching, tools=world.tools())
+
+    assert result.reply == "You spent $11.31 on Oct 25." and result.trace.outcome == "reply"
+    assert all("search_emails" in names for names in offered[:3]) and "search_emails" not in offered[3]
+    assert "read_email" in offered[3]  # the other tools stay

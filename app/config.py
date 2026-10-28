@@ -85,6 +85,11 @@ LLM_CANDIDATES = os.getenv("LLM_CANDIDATES") or (
 LLM_VISION_CANDIDATES = os.getenv("LLM_VISION_CANDIDATES") or (
     "gemini:gemini-3.5-flash,openrouter:google/gemini-3.1-flash-lite,groq:qwen/qwen3.8-27b,gemini:gemini-3.8-flash"
 )
+# Order for images from the user's email (tickets can show passport or booking details): the paid model whose hosts
+# keep nothing comes first (about $0.003 an image), free Gemini only if it's unavailable. Owner's choice, Oct 28.
+LLM_EMAIL_VISION_CANDIDATES = os.getenv("LLM_EMAIL_VISION_CANDIDATES") or (
+    "openrouter:google/gemini-3.1-flash-lite,gemini:gemini-3.5-flash,groq:qwen/qwen3.8-27b,gemini:gemini-3.8-flash"
+)
 # Smaller models that don't answer once private content (email) is involved: their answers to booking questions
 # were the weakest (Oct 27 traces). With no other model free, the honest "try again in a minute" comes instead.
 LLM_NOT_FOR_PRIVATE = {m.strip() for m in (os.getenv("LLM_NOT_FOR_PRIVATE") or

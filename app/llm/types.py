@@ -23,6 +23,7 @@ class ToolCall:
 class Image:
     mime: str   # e.g. "image/jpeg"
     data: bytes
+    from_email: bool = False  # an email's image (view_attachment): goes to models that keep nothing first
 
 
 @dataclass

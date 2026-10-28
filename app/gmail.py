@@ -10,10 +10,11 @@ import re
 from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
 
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 
 from app.config import OWNER_TIMEZONE
 from app.google_auth import google_request
+from app.llm.types import Image
 
 API = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
 # Sizes for the paid model first in line (OpenRouter, no per-minute limit). A request too big for Groq's free
@@ -27,6 +28,14 @@ MAX_SNIPPET = 300   # characters per preview: Gmail's own are about 200, so this
 MAX_ATTACHMENT_TEXT = 2500   # characters across all attachments of one email
 MAX_PDF_BYTES = 5_000_000
 MAX_PDF_PAGES = 6
+# Images in an email (attached, or pasted into its body) can hold what the text doesn't: a ticket, a QR page, a
+# scanned receipt. read_email lists them and the model looks at one with view_attachment, so an email with a banner
+# doesn't send every answer to a photo model. Images linked from the web are never loaded: that tells the sender
+# the email was opened (tracking pixels), and they're mostly logos.
+IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}  # what Gemini can see
+MIN_IMAGE_BYTES = 10_000     # smaller: logos, icons, spacers
+MAX_IMAGE_BYTES = 5_000_000
+LOOK = "call view_attachment with its attachment number to look at it"
 log = logging.getLogger("sidekick.gmail")
 INVISIBLE = re.compile(r"[\u200b-\u200f\u034f\u00ad\ufeff]")  # newsletter padding: costs tokens, means nothing
 
@@ -93,11 +102,30 @@ def html_text(page: str) -> str:
 
 
 def _attachment_parts(part: dict) -> list[dict]:
-    """Every part with a filename (attachments), anywhere in the MIME tree."""
-    found = [part] if part.get("filename") else []
+    """Every attachment anywhere in the MIME tree: parts with a filename, and images pasted into the body (those
+    often have none). Their order is the attachment number read_email and view_attachment share."""
+    pasted = part.get("mimeType", "").startswith("image/") and part.get("body", {}).get("attachmentId")
+    found = [part] if part.get("filename") or pasted else []
     for child in part.get("parts", []):
         found += _attachment_parts(child)
     return found
+
+
+def _name(part: dict, number: int) -> str:
+    return part.get("filename") or f"image {number} in the email"
+
+
+def _is_pdf(part: dict) -> bool:
+    # Some senders label a PDF as a generic file (application/octet-stream): the name tells, the bytes confirm.
+    return part.get("mimeType") == "application/pdf" or part.get("filename", "").lower().endswith(".pdf")
+
+
+def _download(message_id: str, part: dict, ctx) -> bytes:
+    body = part.get("body", {})
+    data = body.get("data")
+    if not data and body.get("attachmentId"):  # bigger attachments are fetched separately
+        data = google_request("GET", f"{API}/{message_id}/attachments/{body['attachmentId']}", "Gmail", ctx).get("data")
+    return base64.urlsafe_b64decode(data or "")
 
 
 def pdf_text(data: bytes) -> str:
@@ -108,24 +136,22 @@ def pdf_text(data: bytes) -> str:
 
 
 def _attachments(message_id: str, payload: dict, ctx) -> list[dict]:
-    """Filename for every attachment; text too for PDFs within the limits."""
+    """Every attachment, numbered: text for PDFs within the limits, and images to look at with view_attachment."""
     out, budget = [], MAX_ATTACHMENT_TEXT
-    for part in _attachment_parts(payload):
-        item = {"filename": part["filename"]}
-        body = part.get("body", {})
-        # Some senders label a PDF as a generic file (application/octet-stream): the name tells, the bytes confirm.
-        if part.get("mimeType") != "application/pdf" and not part["filename"].lower().endswith(".pdf"):
-            item["note"] = "not read (only PDFs are)"
-        elif body.get("size", 0) > MAX_PDF_BYTES:
+    for number, part in enumerate(_attachment_parts(payload), start=1):
+        item = {"attachment": number, "filename": _name(part, number)}
+        mime, size = part.get("mimeType", ""), part.get("body", {}).get("size", 0)
+        if mime in IMAGE_TYPES:
+            item["note"] = ("not shown (a small image, like a logo)" if size < MIN_IMAGE_BYTES else
+                            "not shown (too large)" if size > MAX_IMAGE_BYTES else f"an image: {LOOK}")
+        elif not _is_pdf(part):
+            item["note"] = "not read (only PDFs and images are)"
+        elif size > MAX_PDF_BYTES:
             item["note"] = "not read (too large)"
         elif budget <= 0:
             item["note"] = "not read (text limit for this email reached)"
         else:
-            data = body.get("data")
-            if not data and body.get("attachmentId"):  # bigger attachments are fetched separately
-                fetched = google_request("GET", f"{API}/{message_id}/attachments/{body['attachmentId']}", "Gmail", ctx)
-                data = fetched.get("data")
-            raw = base64.urlsafe_b64decode(data or "")
+            raw = _download(message_id, part, ctx)
             try:
                 text = pdf_text(raw) if raw.startswith(b"%PDF") else None
             except Exception as exc:  # broken, encrypted or odd PDFs: say so, never crash the agent
@@ -134,18 +160,62 @@ def _attachments(message_id: str, payload: dict, ctx) -> list[dict]:
             else:
                 if text is None:
                     item["note"] = "not read (named .pdf but isn't a PDF)"
-                elif not text:  # pages that are pictures (a scan, a ticket image): no text to read
-                    item["note"] = ("no text in this PDF (its pages are images, e.g. a scan), so it can't be read; "
-                                    "look for the details in the email text or another email")
+                elif not text:  # pages that are pictures (a scan, a ticket image): no text, but a model can look
+                    item["note"] = f"no text in this PDF (its pages are images, e.g. a scan): {LOOK}"
                 else:
                     item["text"], budget = text[:budget], budget - len(text)
                     if len(text) > len(item["text"]):
                         item["truncated"] = True
             # Metadata only (never the name or text): enough to tell why a PDF went unread.
             log.info("PDF attachment: %s, type %s, %d bytes", "read" if "text" in item else item["note"][:40],
-                     part.get("mimeType"), len(raw))
+                     mime, len(raw))
         out.append(item)
     return out
+
+
+def first_pages(data: bytes) -> bytes:
+    """At most MAX_PDF_PAGES pages: a model reads, and is paid for, every page it gets."""
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        if len(reader.pages) <= MAX_PDF_PAGES:
+            return data
+        writer = PdfWriter()
+        for page in reader.pages[:MAX_PDF_PAGES]:
+            writer.add_page(page)
+        out = io.BytesIO()
+        writer.write(out)
+        return out.getvalue()
+    except Exception:  # an odd PDF the reader can't split: sent whole (it's at most MAX_PDF_BYTES)
+        return data
+
+
+def view_attachment(message_id: str, attachment: int, *, ctx=None) -> dict:
+    """One image, or a PDF whose pages are images, from an email (numbered as read_email lists them), for the model
+    to look at. It's returned under "_images": the agent loop passes it on as a picture, never as text."""
+    msg = google_request("GET", f"{API}/{message_id}", "Gmail", ctx, params={"format": "full"})
+    if "error" in msg:
+        return msg
+    parts = _attachment_parts(msg.get("payload", {}))
+    if not 1 <= attachment <= len(parts):
+        return {"error": f"That email has no attachment {attachment} (it has {len(parts)})."}
+    part = parts[attachment - 1]
+    name, mime, size = _name(part, attachment), part.get("mimeType", ""), part.get("body", {}).get("size", 0)
+    if mime in IMAGE_TYPES:
+        if not MIN_IMAGE_BYTES <= size <= MAX_IMAGE_BYTES:
+            return {"error": f"{name} can't be shown: it's logo-sized or too large."}
+        data = _download(message_id, part, ctx)
+    elif _is_pdf(part):
+        if size > MAX_PDF_BYTES:
+            return {"error": f"{name} can't be shown: it's too large."}
+        data, mime = first_pages(_download(message_id, part, ctx)), "application/pdf"
+        if not data.startswith(b"%PDF"):
+            return {"error": f"{name} isn't really a PDF."}
+    else:
+        return {"error": f"{name} isn't an image or a PDF, so it can't be shown."}
+    if not data:
+        return {"error": f"Couldn't download {name}."}
+    log.info("Showing an email attachment: type %s, %d bytes", mime, len(data))  # metadata only
+    return {"summary": f"{name} follows as an image for you to look at.", "_images": [Image(mime=mime, data=data, from_email=True)]}
 
 
 def read_email(message_id: str, *, ctx=None) -> dict:
