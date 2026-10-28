@@ -14,6 +14,8 @@ from app.google_auth import google_request
 
 API = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
 MAX_BODY = 1500  # characters (~400 tokens); keeps requests under per-minute token limits (Groq: 8K/min)
+MAX_RESULTS = 8     # emails per search: the list is resent on every later call of the answer (was 15; Oct 27,
+MAX_SNIPPET = 150   # a member's booking questions hit the per-minute limit after one email, every time)
 # Bookings and itineraries often live in PDF attachments. Read them, within limits: a PDF from a stranger is
 # untrusted input, and its text shares the same per-minute token budget.
 MAX_ATTACHMENT_TEXT = 2500   # characters across all attachments of one email
@@ -27,9 +29,9 @@ def _headers(message: dict) -> dict:
     return {h["name"]: h["value"] for h in message.get("payload", {}).get("headers", [])}
 
 
-def search_emails(query: str = "is:unread newer_than:1d", max_results: int = 15, *, ctx=None) -> dict:
+def search_emails(query: str = "is:unread newer_than:1d", max_results: int = MAX_RESULTS, *, ctx=None) -> dict:
     """query uses Gmail's own search syntax, exactly like the Gmail search box."""
-    data = google_request("GET", API, "Gmail", ctx, params={"q": query, "maxResults": min(max_results, 15)})
+    data = google_request("GET", API, "Gmail", ctx, params={"q": query, "maxResults": min(max_results, MAX_RESULTS)})
     if "error" in data:
         return data
 
@@ -49,7 +51,7 @@ def search_emails(query: str = "is:unread newer_than:1d", max_results: int = 15,
             "subject": h.get("Subject", "(no subject)"),
             "date": h.get("Date", ""),
             # Newsletters pad previews with invisible characters; drop them (they cost tokens).
-            "snippet": INVISIBLE.sub("", html.unescape(msg.get("snippet", ""))).strip(),
+            "snippet": INVISIBLE.sub("", html.unescape(msg.get("snippet", ""))).strip()[:MAX_SNIPPET],
         })
     return {"query": query, "count": len(emails), "emails": emails}
 

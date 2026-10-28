@@ -78,5 +78,9 @@ LLM_CANDIDATES = os.getenv("LLM_CANDIDATES") or (
 LLM_VISION_CANDIDATES = os.getenv("LLM_VISION_CANDIDATES") or (
     "gemini:gemini-3.5-flash,groq:qwen/qwen3.8-27b,gemini:gemini-3.8-flash"
 )
+# Smaller models that don't answer once private content (email) is involved: their answers to booking questions
+# were the weakest (Oct 27 traces). With no other model free, the honest "try again in a minute" comes instead.
+LLM_NOT_FOR_PRIVATE = {m.strip() for m in (os.getenv("LLM_NOT_FOR_PRIVATE") or
+                       "gemini:gemini-3.5-flash-lite,gemini:gemini-3.1-flash-lite").split(",") if m.strip()}
 # Providers that must NOT see sensitive content (email bodies/previews), e.g. "groq". Empty = all allowed.
 LLM_BLOCK_SENSITIVE = {p.strip() for p in os.getenv("LLM_BLOCK_SENSITIVE", "").split(",") if p.strip()}

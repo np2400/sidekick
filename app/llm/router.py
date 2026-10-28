@@ -9,7 +9,8 @@ import logging
 import time
 from dataclasses import dataclass
 
-from app.config import GEMINI_API_KEY, GROQ_API_KEY, LLM_BLOCK_SENSITIVE, LLM_CANDIDATES, LLM_VISION_CANDIDATES
+from app.config import (GEMINI_API_KEY, GROQ_API_KEY, LLM_BLOCK_SENSITIVE, LLM_CANDIDATES, LLM_NOT_FOR_PRIVATE,
+                        LLM_VISION_CANDIDATES)
 from app.llm.gemini import GeminiAdapter
 from app.llm.openai_compat import OpenAICompatAdapter
 from app.llm.types import Attempt, LLMResponse, Message, ProviderError, ToolSpec
@@ -126,12 +127,14 @@ class Router:
         raise AllProvidersFailed(attempts)
 
 
-def parse_candidates(spec: str, block_sensitive: set[str]) -> list[Candidate]:
-    """'gemini:gemini-3.8-flash,groq:qwen/qwen3.8-27b' -> Candidates (split on the FIRST colon only)."""
+def parse_candidates(spec: str, block_sensitive: set[str], not_for_private: set[str] = frozenset()) -> list[Candidate]:
+    """'gemini:gemini-3.8-flash,groq:qwen/qwen3.8-27b' -> Candidates (split on the FIRST colon only).
+    `block_sensitive`: providers, `not_for_private`: single models that may not see private content."""
     out = []
     for item in filter(None, (s.strip() for s in spec.split(","))):
         provider, model = item.split(":", 1)
-        out.append(Candidate(provider, model, allow_sensitive=provider not in block_sensitive,
+        out.append(Candidate(provider, model,
+                             allow_sensitive=provider not in block_sensitive and item not in not_for_private,
                              vision=provider == "gemini" or item in VISION_MODELS))
     return out
 
@@ -149,9 +152,9 @@ def default_router() -> Router:
     if GROQ_API_KEY:
         adapters["groq"] = OpenAICompatAdapter("groq", "https://api.groq.com/openai/v1", GROQ_API_KEY,
                                                extra_body=groq_extras)
-    candidates = parse_candidates(LLM_CANDIDATES, LLM_BLOCK_SENSITIVE)
+    candidates = parse_candidates(LLM_CANDIDATES, LLM_BLOCK_SENSITIVE, LLM_NOT_FOR_PRIVATE)
     missing = sorted({c.provider for c in candidates} - adapters.keys())
     if missing:
         log.info("No API key for %s: those candidates are skipped", ", ".join(missing))
     return Router(candidates, adapters,
-                  vision_candidates=parse_candidates(LLM_VISION_CANDIDATES, LLM_BLOCK_SENSITIVE))
+                  vision_candidates=parse_candidates(LLM_VISION_CANDIDATES, LLM_BLOCK_SENSITIVE, LLM_NOT_FOR_PRIVATE))
