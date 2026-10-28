@@ -1,10 +1,11 @@
 """The agent loop: tool selection plumbing, failures, limits. Fake model + FakeWorld, no network."""
 import httpx
 
-from app.agent import MAX_STEPS, run_agent
+from app.agent import MAX_STEPS, STEP_LIMIT_REPLY, run_agent
 from app.llm.router import AllProvidersFailed
 from app.llm.types import Attempt
 from app.trace import ToolContext
+from evals.world import FakeWorld
 from tests.fakes import ScriptedProvider, call, text
 
 CTX = ToolContext(chat_id=1)
@@ -76,7 +77,22 @@ def test_step_limit_answers_from_what_was_found_instead_of_giving_up(world):
 def test_step_limit_still_says_sorry_if_no_model_can_write_the_answer(world):
     llm = ScriptedProvider(*[[call("list_tasks")] for _ in range(MAX_STEPS)], AllProvidersFailed([]))
     result = run_agent("loop forever", CTX, llm=llm, tools=world.tools())
-    assert result.trace.outcome == "step_limit" and "stuck" in result.reply
+    assert result.trace.outcome == "step_limit" and result.reply == STEP_LIMIT_REPLY
+
+
+def test_an_empty_last_answer_goes_to_the_next_model():
+    """Production, Oct 28: the last call came back empty, and the user got only 'stuck in a loop'."""
+    world = FakeWorld(emails=[{"id": "d1", "from": "Pizza Place <orders@pizza.example>", "subject": "Your order",
+                               "date": "Oct 25", "snippet": "Thanks!", "body": "Order 77. Total $23.45."}])
+    first, second = ScriptedProvider(*[[call("read_email", message_id="d1")] for _ in range(MAX_STEPS)], [text("")],
+                                     model="gpt-oss"), ScriptedProvider([text("You spent $23.45 (order 77).")])
+
+    def llm(messages, tools=None, system="", sensitive=False, avoid=frozenset()):
+        return (second if "scripted:gpt-oss" in avoid else first)(messages, tools, system, sensitive)
+    result = run_agent("how much did I spend on pizza?", CTX, llm=llm, tools=world.tools())
+
+    assert result.trace.outcome == "step_limit" and result.reply == "You spent $23.45 (order 77)."
+    assert "Total $23.45" in second.received[0][0].text  # the email reached the model writing the answer
 
 
 def test_email_research_has_a_per_message_budget(world):
