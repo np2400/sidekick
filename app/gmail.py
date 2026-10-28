@@ -7,9 +7,12 @@ import html
 import io
 import logging
 import re
+from email.utils import parsedate_to_datetime
+from zoneinfo import ZoneInfo
 
 from pypdf import PdfReader
 
+from app.config import OWNER_TIMEZONE
 from app.google_auth import google_request
 
 API = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
@@ -26,6 +29,16 @@ MAX_PDF_BYTES = 5_000_000
 MAX_PDF_PAGES = 6
 log = logging.getLogger("sidekick.gmail")
 INVISIBLE = re.compile(r"[\u200b-\u200f\u034f\u00ad\ufeff]")  # newsletter padding: costs tokens, means nothing
+
+
+def _local_date(header: str, ctx) -> str:
+    """An email's Date header in the user's timezone: senders often write UTC, and models repeat it as given
+    (Oct 27: "Oct 25, 05:35 UTC" for a payment made the evening of Oct 24). Unparseable: left as it is."""
+    try:
+        when = parsedate_to_datetime(header).astimezone(ZoneInfo(getattr(ctx, "tz", None) or OWNER_TIMEZONE))
+    except (TypeError, ValueError, IndexError):
+        return header
+    return f"{when:%a %b} {when.day} {when:%Y}, {when.hour % 12 or 12}:{when:%M %p} ({when.tzname()})"
 
 
 def _headers(message: dict) -> dict:
@@ -52,7 +65,7 @@ def search_emails(query: str = "is:unread newer_than:1d", max_results: int = MAX
             "id": msg["id"],
             "from": h.get("From", ""),
             "subject": h.get("Subject", "(no subject)"),
-            "date": h.get("Date", ""),
+            "date": _local_date(h.get("Date", ""), ctx),
             # Newsletters pad previews with invisible characters; drop them (they cost tokens).
             "snippet": INVISIBLE.sub("", html.unescape(msg.get("snippet", ""))).strip()[:MAX_SNIPPET],
         })
@@ -141,7 +154,7 @@ def read_email(message_id: str, *, ctx=None) -> dict:
     return {
         "from": h.get("From", ""),
         "subject": h.get("Subject", ""),
-        "date": h.get("Date", ""),
+        "date": _local_date(h.get("Date", ""), ctx),
         "body": body[:MAX_BODY],
         "truncated": len(body) > MAX_BODY,
         "attachments": _attachments(message_id, payload, ctx),

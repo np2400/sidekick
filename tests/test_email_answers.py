@@ -74,3 +74,17 @@ def test_the_smallest_models_dont_answer_once_email_is_involved():
     candidates = parse_candidates("groq:openai/gpt-oss-120b,gemini:gemini-3.5-flash-lite", set(),
                                   {"gemini:gemini-3.5-flash-lite"})
     assert [c.allow_sensitive for c in candidates] == [True, False]
+
+
+def test_email_dates_come_in_the_users_timezone(monkeypatch):
+    """Senders often write UTC: a payment the evening of Oct 24 in California is dated Oct 25 05:35 UTC."""
+    message = {"id": "m1", "snippet": "Receipt", "payload": {"mimeType": "text/plain", "body": {"data": ""},
+               "headers": [{"name": "Date", "value": "Sun, 25 Oct 2026 05:35:00 +0000"}]}}
+    monkeypatch.setattr(gmail, "google_request", lambda method, url, *a, **k:
+                        {"messages": [{"id": "m1"}]} if url == gmail.API else message)
+    la, india = ToolContext(chat_id=1, tz="America/Los_Angeles"), ToolContext(chat_id=2, tz="Asia/Kolkata")
+    assert gmail.read_email("m1", ctx=la)["date"] == "Sat Oct 24 2026, 10:35 PM (PDT)"
+    assert gmail.search_emails("receipt", ctx=india)["emails"][0]["date"] == "Sun Oct 25 2026, 11:05 AM (IST)"
+
+    message["payload"]["headers"][0]["value"] = "sometime last week"  # unparseable: left as the sender wrote it
+    assert gmail.read_email("m1", ctx=la)["date"] == "sometime last week"
