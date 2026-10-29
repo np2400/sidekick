@@ -13,7 +13,7 @@
 <body>
 <h1>Sidekick privacy policy</h1>
 <p><em>Last updated: October 27, 2026</em> (saved conversations kept 30 days, encrypted and deletable; signing in to and chatting in Sidekick Web; photos and
-PDFs in Sidekick Web, kept 10 minutes for follow-up questions; notifications; OpenRouter as the first AI provider; images in your email; a personal morning brief)</p>
+PDFs in Sidekick Web, kept 10 minutes for follow-up questions; notifications; OpenRouter as the first AI provider; images in your email; a personal morning brief; email, calendar and photos never sent to Gemini's free tier)</p>
 
 <p>Sidekick is a personal AI assistant on Telegram, built and run by Neel Parekh. It is used by its owner
 and a few people the owner invites with a one-time link; there is no public sign-up.</p>
@@ -63,7 +63,7 @@ and a few people the owner invites with a one-time link; there is no public sign
     reminders and morning brief are also kept in Sidekick Web's notification center, encrypted, for 30 days, then
     deleted. You can choose in Settings whether they also go to Telegram.</li>
   <li><strong>Photos</strong> you send the bot or attach in Sidekick Web: passed to an AI model that can read images
-    (currently Google Gemini, with Qwen on Groq as a backup) to answer you. Sidekick Web first makes a photo smaller
+    (currently Gemini Flash-Lite through OpenRouter, with Qwen on Groq as a backup) to answer you. Sidekick Web first makes a photo smaller
     in your browser, which also removes hidden details such as the location it was taken. Sidekick does not keep
     photos beyond the 10 minutes described below.</li>
   <li><strong>PDFs</strong> you attach in Sidekick Web: Sidekick reads the text of the first pages and sends it,
@@ -77,10 +77,11 @@ and a few people the owner invites with a one-time link; there is no public sign
 
 <h2>How it is used</h2>
 <p>Only to answer your requests. To write a reply, the text of your request and any calendar or email content
-Sidekick read for it are sent to the AI model provider generating the reply (currently OpenRouter, which passes it
-only to hosts that don't keep it or train on it; then Groq, and Google Gemini as a fallback; Gemini first for photos
-you send). When an answer needs an image or a scanned PDF from your email, it goes to OpenRouter first, the same way.
-Sidekick uses Gemini's free tier, where Google may use submitted content to improve its products. Sidekick does not sell data, show ads, or use it for anything else.</p>
+Sidekick read for it are sent to the AI model provider generating the reply: OpenRouter, which passes it only to
+hosts that don't keep it or train on it, or Groq as a backup. Photos you send and images from your email go the same
+way. Your email, calendar and photos are never sent to Google Gemini's free tier, where Google may use submitted
+content to improve its products; it may answer only requests without them (for example web search or weather).
+Sidekick does not sell data, show ads, or use it for anything else.</p>
 
 <h2>What is stored, and where</h2>
 <ul>

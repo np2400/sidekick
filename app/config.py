@@ -77,8 +77,9 @@ LLM_CANDIDATES = os.getenv("LLM_CANDIDATES") or (
     "openrouter:openai/gpt-oss-120b,groq:openai/gpt-oss-120b,groq:qwen/qwen3.8-27b,gemini:gemini-3.5-flash,gemini:gemini-3.8-flash,"
     "gemini:gemini-3.5-flash-lite,gemini:gemini-3.1-flash-lite"
 )
-# Order for messages with a photo (only models that can see). Gemini first: on the same photo it was right
-# 5/5 vs Qwen 1/4 (2026-10-24). Trade-off: Google's free tier may use content to improve its products.
+# Order for messages with a photo (only models that can see). Gemini was right 5/5 vs Qwen 1/4 on the same photo
+# (2026-10-24), but free Gemini never sees private content (LLM_BLOCK_SENSITIVE) and a photo is private, so photos
+# go to Gemini Flash-Lite through OpenRouter first.
 # Then Gemini 3.1 Flash-Lite through OpenRouter (paid, about $0.003 a photo, hosts that keep nothing; 3.8 Flash was
 # about a cent): on Oct 27 a member's photo got "overloaded" once the free models were used up. It's in this list
 # only, so it answers only messages with a photo, and must stay off LLM_NOT_FOR_PRIVATE: every photo counts as private.
@@ -94,5 +95,9 @@ LLM_EMAIL_VISION_CANDIDATES = os.getenv("LLM_EMAIL_VISION_CANDIDATES") or (
 # were the weakest (Oct 27 traces). With no other model free, the honest "try again in a minute" comes instead.
 LLM_NOT_FOR_PRIVATE = {m.strip() for m in (os.getenv("LLM_NOT_FOR_PRIVATE") or
                        "gemini:gemini-3.5-flash-lite,gemini:gemini-3.1-flash-lite").split(",") if m.strip()}
-# Providers that must NOT see sensitive content (email bodies/previews), e.g. "groq". Empty = all allowed.
-LLM_BLOCK_SENSITIVE = {p.strip() for p in os.getenv("LLM_BLOCK_SENSITIVE", "").split(",") if p.strip()}
+# Providers that must NOT see private content (email, calendar, photos). Default: Gemini, because its free tier lets
+# Google use submitted content to improve its products, and Google's Limited Use rules for Gmail and Calendar data
+# (promised in the privacy policy) forbid that (owner's choice, Oct 29). Its models stay in the lists for everything
+# else (web search, weather). "none" allows every provider.
+_BLOCK = (os.getenv("LLM_BLOCK_SENSITIVE") or "gemini").strip()
+LLM_BLOCK_SENSITIVE = set() if _BLOCK.lower() == "none" else {p.strip() for p in _BLOCK.split(",") if p.strip()}

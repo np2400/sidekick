@@ -232,3 +232,11 @@ def test_when_the_words_find_nothing_that_days_emails_are_listed_without_them(mo
 
     asked.clear()  # no day or direction: nothing narrows it, so no listing of everything
     assert gmail.search_emails("receipt", ctx=la)["count"] == 0 and asked == ["receipt"]
+
+
+def test_a_calendar_answer_counts_as_private_like_email(world):
+    """Google's Limited Use rules cover Calendar data too: after list_events, only models allowed private content."""
+    llm = ScriptedProvider([call("list_events", start="2026-10-20T00:00:00", end="2026-10-20T23:59:59")],
+                           [text("You have Study system design at 4 PM.")])
+    run_agent("What's on today?", CTX, llm=llm, tools=world.tools())
+    assert llm.sensitive_flags == [False, True]

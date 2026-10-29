@@ -28,8 +28,8 @@ loop, a provider-neutral model router, 491 offline tests and a live evaluation h
 - **Approval gate in code, not in the prompt.** The model can only *propose* a calendar event or Todoist task; code
   holds it until the user taps ✅, and executes it at most once, even across crashes and retries.
 - **Model router with fallback and privacy routing** (`app/llm/`). One neutral message format across OpenRouter,
-  Groq and Gemini: retries, a circuit breaker, per-answer cost tracking, and email content sent only to providers
-  allowed to see it (OpenRouter with zero data retention). Photos and email images go to vision models; a PDF only to
+  Groq and Gemini: retries, a circuit breaker, per-answer cost tracking, and private content (email, calendar,
+  photos) sent only to providers that don't keep or train on it, never to a free tier that may. Photos and email images go to vision models; a PDF only to
   models that read PDFs. Typical cost: about $0.001 per message.
 - **Code decides, the model writes.** Wherever a model was unreliable in production traces, the decision moved into
   code: timezone and weekday math, sorting email from people vs. automated mail (Gmail categories and bulk-mail

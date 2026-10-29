@@ -503,7 +503,8 @@ def decide(ctx: ToolContext, approve: bool, action_id: int | None = None, tools:
 
 # --- The loop -------------------------------------------------------------------
 
-SENSITIVE_TOOLS = {"search_emails", "read_email", "view_attachment"}  # their results are private content -> privacy routing
+# Their results are private content -> privacy routing. Calendar too: Google's Limited Use rules cover it (Oct 29).
+SENSITIVE_TOOLS = {"search_emails", "read_email", "view_attachment", "list_events"}
 
 
 def system_prompt(tools: dict | None = None, tz: str = OWNER_TIMEZONE, now: datetime | None = None) -> str:
