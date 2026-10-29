@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { getPreferences, getSession, saveBriefSettings, setTelegramNotifications, signOut, type Preferences } from "../api";
+import { conversationsChanged, deleteAccount, deleteAllConversations, EXPORT_URL, getPreferences, getSession,
+  saveBriefSettings, setTelegramNotifications, signOut, type Preferences } from "../api";
 import { PageHeader, PreviewPill, TelegramHint } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
 import Notifications from "../components/Notifications";
@@ -77,6 +78,58 @@ function BriefSettings({ initial }: { initial: Preferences }) {
   );
 }
 
+const CONFIRM = "delete everything";
+
+/** Export, delete all conversations, delete the account: the same as /export, /forget_all and /delete_me. */
+function DataControls({ owner, onGone }: { owner: boolean; onGone: () => void }) {
+  const [status, setStatus] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function forgetAll() {
+    if (!window.confirm("Delete all your saved conversations, here and in Telegram? This can't be undone.")) return;
+    const result = await deleteAllConversations();
+    if (result.state === "ready") {
+      conversationsChanged();
+      setStatus(`Deleted ${result.data.deleted} messages.`);
+    } else setStatus(result.state === "unavailable" ? result.reason : "Sign in again, then try once more.");
+  }
+
+  async function eraseAll() {
+    setBusy(true);
+    const result = await deleteAccount();
+    setBusy(false);
+    if (result.state === "ready" || result.state === "signed_out") onGone();
+    else setStatus(result.reason);
+  }
+
+  return (
+    <>
+      <Row icon="download" title="Export your data"
+        body="A file with everything Sidekick stores about you (sign-in tokens left out)."
+        control={<a className="btn btn-secondary btn-sm" href={EXPORT_URL} download>Export</a>} />
+      <Row icon="eraser" title="Delete all conversations"
+        body="Saved for 30 days. Delete one from its page in Chat, or all of them here."
+        control={<button className="btn btn-secondary btn-sm" onClick={forgetAll}>Delete all</button>} />
+      <Row icon="trash" title="Delete account and data" danger
+        body={owner ? "Erases everything Sidekick stores about you and revokes Google access. You can keep using Sidekick, starting empty."
+          : "Erases everything and revokes Google access. You leave Sidekick; coming back needs a new invite."}
+        control={!asking && <button className="btn btn-secondary btn-sm" onClick={() => setAsking(true)}>Delete…</button>} />
+      {asking && (
+        <div className="danger-confirm">
+          <input className="text-input" value={typed} onChange={(e) => setTyped(e.target.value)}
+            placeholder={`Type "${CONFIRM}" to confirm`} aria-label={`Type ${CONFIRM} to confirm`} />
+          <button className="btn btn-danger btn-sm" disabled={typed.trim().toLowerCase() !== CONFIRM || busy}
+            onClick={eraseAll}>{busy ? "Deleting…" : "Delete for good"}</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => { setAsking(false); setTyped(""); }}>Cancel</button>
+        </div>
+      )}
+      {status && <p className="muted small brief-field" role="status">{status}</p>}
+    </>
+  );
+}
+
 const Unavailable = ({ label }: { label: string }) => (
   <button className="btn btn-secondary btn-sm" disabled aria-disabled="true" title="Not connected yet">{label}</button>
 );
@@ -142,16 +195,7 @@ export default function Settings() {
       </Section>
 
       <Section title="Privacy and data">
-        <Row icon="download" title="Export your data"
-          body={<>A file with everything Sidekick stores about you. <TelegramHint>/export</TelegramHint></>}
-          control={<Unavailable label="Export" />} />
-        <Row icon="eraser" title="Delete conversations"
-          body={<>Saved for 30 days. Delete the current one, or all of them.{" "}
-            <TelegramHint>/forget  ·  /forget_all</TelegramHint></>}
-          control={<Unavailable label="Delete" />} />
-        <Row icon="trash" title="Delete account and data" danger
-          body={<>Erases everything and revokes Google access. <TelegramHint>/delete_me</TelegramHint></>}
-          control={<Unavailable label="Delete" />} />
+        <DataControls owner={me?.role === "owner"} onGone={() => navigate("/", { replace: true })} />
         <a className="text-link" href={PRIVACY_URL} target="_blank" rel="noreferrer">
           Read the privacy policy <Icon name="external" size={14} />
         </a>

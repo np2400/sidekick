@@ -3,7 +3,8 @@ import {
 } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  conversationsChanged, decideProposal, getConversation, jobStatus, sendMessage, type Attached, type Message,
+  conversationsChanged, decideProposal, deleteConversation, getConversation, jobStatus, sendMessage, type Attached,
+  type Message,
   type Result, type Transcript, type Unavailable,
 } from "../api";
 import { EmptyState, Skeleton } from "../components/Common";
@@ -109,6 +110,7 @@ const when = (iso: string) =>
 /** One conversation, exactly as saved (in Telegram or here), plus what's still being answered and a proposal
  *  waiting for a yes or no. `version` goes up when a message was just sent: reload in place. */
 function Thread({ id, version, onView }: { id: string; version: number; onView: (url: string) => void }) {
+  const navigate = useNavigate();
   const [result, setResult] = useState<Result<Transcript> | null>(null);
   const [deciding, setDeciding] = useState(false);
   const [decideProblem, setDecideProblem] = useState<string | null>(null);
@@ -171,6 +173,18 @@ function Thread({ id, version, onView }: { id: string; version: number; onView: 
     setDeciding(false);
   }
 
+  async function remove() {
+    if (!window.confirm("Delete this conversation? Its messages are erased for good.")) return;
+    const outcome = await deleteConversation(Number(id));
+    if (outcome.state === "ready") {
+      SENT.delete(Number(id));
+      conversationsChanged();
+      navigate("/app/chat", { replace: true });
+    } else {
+      setDecideProblem(outcome.state === "unavailable" ? outcome.reason : "Sign in again, then try once more.");
+    }
+  }
+
   const local = SENT.get(Number(id)) ?? [];
   const files = thread ? withFiles(thread.messages, local) : new Map<number, LocalFile>();
 
@@ -182,7 +196,11 @@ function Thread({ id, version, onView }: { id: string; version: number; onView: 
   return (
     <div className="thread">
       <header className="thread-head">
-        <h1>{thread.title}</h1>
+        <div className="thread-title">
+          <h1>{thread.title}</h1>
+          <button className="btn btn-ghost btn-sm" onClick={remove} aria-label="Delete this conversation"
+            title="Delete this conversation"><Icon name="trash" size={16} /></button>
+        </div>
         <p className="muted small">
           {thread.origin === "telegram" ? "Started in Telegram" : "Started here"} · kept for 30 days after the last message
         </p>

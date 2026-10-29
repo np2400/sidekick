@@ -180,6 +180,20 @@ export const setTelegramNotifications = (on: boolean) =>
 export const CONVERSATIONS_CHANGED = "sidekick:conversations-changed";
 export const conversationsChanged = () => window.dispatchEvent(new Event(CONVERSATIONS_CHANGED));
 
+/** Google's sign-in page for this account (Calendar, plus read-only Gmail if asked). The browser goes there and
+ *  comes back to the Apps page with ?connected= or ?problem=. */
+export const connectGoogle = (gmail: boolean) => post<{ url: string }>("google/connect", { gmail });
+/** Revokes Sidekick's access at Google and deletes the stored token: Calendar and Gmail together. */
+export const disconnectGoogle = () => post<Connections>("google/disconnect");
+/** A link, not a fetch: the browser downloads the file (the session cookie goes along, same site). */
+export const EXPORT_URL = "/api/export";
+export const deleteConversation = (id: number) =>
+  post<{ deleted: number }>(`conversations/${id}`, undefined, "DELETE");
+export const deleteAllConversations = () => post<{ deleted: number }>("conversations", undefined, "DELETE");
+/** Erases everything about this person (members leave Sidekick). The words are checked by the server too. */
+export const deleteAccount = () =>
+  post<{ deleted: number; removed: boolean }>("account/delete", { confirm: "delete everything" });
+
 /** The latest brief (this morning's, or one made with "Make my brief now"). */
 export const getBrief = () => get<{ latest: LatestBrief | null }>("brief");
 /** Build one now: a few seconds (email, then one AI call). At most once a minute. */

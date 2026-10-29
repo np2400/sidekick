@@ -281,6 +281,12 @@ code {
   margin: 0 auto; padding: 24px 20px 32px; }
 .thread-head h1 { margin: 0 0 4px; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
 .thread-head p { margin: 0; }
+.thread-title { display: flex; align-items: flex-start; gap: 8px; }
+.thread-title h1 { flex: 1; min-width: 0; }
+.danger-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 20px 14px; }
+.danger-confirm .text-input { width: auto; flex: 1; min-width: 180px; }
+.btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn-danger:disabled { opacity: 0.5; }
 .msg { display: flex; flex-direction: column; gap: 4px; max-width: 82%; }
 .msg.user { align-self: flex-end; align-items: flex-end; }
 .msg.assistant { align-self: flex-start; }
