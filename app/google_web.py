@@ -3,7 +3,8 @@
 /connect asks for Google Calendar; /connect gmail also asks for Gmail, read-only. Asking only for what the user
 chose, when they choose it, is Google's "incremental authorization".
 
-1. /connect  -> start(): a sign-in link tied to this Telegram chat by a random `state` (10 minutes, single use)
+1. /connect, or Connect in Sidekick Web -> start(): a sign-in link tied to this account by a random `state` (10
+   minutes, single use)
 2. Google    -> the user signs in on Google's own page and allows access (Sidekick never sees passwords)
 3. callback  -> finish(): swap the one-time code for tokens, store them encrypted for that chat only
 4. later     -> access_token(): refresh silently; /disconnect revokes at Google and deletes the row
@@ -75,7 +76,7 @@ def finish(state: str, code: str) -> tuple[int, str, bool]:
                            "AND expires_at > datetime('now')", (_hash(state),)).fetchone()
         used = conn.execute("DELETE FROM oauth_states WHERE state_hash = ?", (_hash(state),)).rowcount
     if row is None or used != 1:
-        raise ConnectError("This sign-in link has expired or was already used. Send /connect again.")
+        raise ConnectError("This sign-in link has expired or was already used. Try connecting again.")
 
     response = httpx.post(TOKEN_URI, data={
         "code": code, "client_id": GOOGLE_WEB_CLIENT_ID, "client_secret": GOOGLE_WEB_CLIENT_SECRET,
@@ -83,14 +84,14 @@ def finish(state: str, code: str) -> tuple[int, str, bool]:
     }, timeout=15)
     if response.status_code != 200:
         log.error("Google token exchange failed: HTTP %s", response.status_code)  # the body may echo secrets
-        raise ConnectError("Google didn't accept the sign-in. Send /connect to try again.")
+        raise ConnectError("Google didn't accept the sign-in. Try connecting again.")
     token = response.json()
     granted = token.get("scope", "").split()
     for scope, name in REFUSED.items():  # Google lets people untick boxes on its consent screen
         if scope in row["scopes"].split() and scope not in granted:
-            raise ConnectError(f"{name} access wasn't allowed (that box was unticked). Send /connect to try again.")
+            raise ConnectError(f"{name} access wasn't allowed (that box was unticked). Try connecting again.")
     if not token.get("refresh_token"):
-        raise ConnectError("Google didn't give lasting access. Send /connect to try again.")
+        raise ConnectError("Google didn't give lasting access. Try connecting again.")
     email = _email(token["access_token"])
     scopes = " ".join(s for s in granted if s in REFUSED)
     _save(row["chat_id"], email, {"refresh_token": token["refresh_token"], "access_token": token["access_token"],

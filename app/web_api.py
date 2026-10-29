@@ -13,11 +13,11 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, model_validator
 
-from app import (brief, daily, gmail, google_auth, google_web, jobs, memory, native_tasks, notifications, push, reminders,
-                 settings, uploads, users, vault, web_login)
+from app import (account, brief, daily, gmail, google_auth, google_web, jobs, memory, native_tasks, notifications,
+                 push, reminders, settings, uploads, users, vault, web_login)
 from app.agent import PENDING, decide
 from app.config import MEMBER_DAILY_LIMIT, TASK_BACKEND, TELEGRAM_OWNER_ID
 from app.trace import ToolContext
@@ -328,6 +328,73 @@ def telegram_notifications(choice: TelegramChoice, account_id: int = Depends(sig
     """Also send reminders and the brief to Telegram? Off takes effect only while a device gets notifications."""
     notifications.set_telegram(account_id, choice.on)
     return preferences(account_id)
+
+
+# --- Google, and your data (W7b): the same as /connect, /disconnect, /export, /forget and /delete_me ------------
+
+class GoogleChoice(BaseModel):
+    gmail: bool = False  # False: Calendar only. True: Calendar and Gmail (read-only), like /connect gmail
+
+
+@router.post("/google/connect", dependencies=[Depends(from_our_pages)])
+def google_connect(choice: GoogleChoice, account_id: int = Depends(signed_in)) -> dict:
+    """Google's sign-in page for this account. The browser goes there, then back to the Apps page."""
+    if _role(account_id) == "owner":
+        raise HTTPException(status_code=409, detail="Your Google account is connected through the server setup.")
+    if not google_web.configured():
+        raise HTTPException(status_code=503, detail="Connecting Google isn't set up on this Sidekick yet.")
+    return {"url": google_web.start(account_id, gmail=choice.gmail)}
+
+
+@router.post("/google/disconnect", dependencies=[Depends(from_our_pages)])
+def google_disconnect(account_id: int = Depends(signed_in)) -> dict:
+    """Revoke Sidekick's access at Google and delete the stored token (Calendar and Gmail together)."""
+    if _role(account_id) == "owner":
+        raise HTTPException(status_code=409, detail="Your Google account is connected through the server setup.")
+    google_web.disconnect(account_id)
+    return connection_list(account_id)
+
+
+@router.get("/export")
+def export(account_id: int = Depends(signed_in)) -> Response:
+    """Everything stored about this person, as a file (sign-in tokens left out)."""
+    data = json.dumps(account.export_data(account_id), indent=2, ensure_ascii=False)
+    name = f"sidekick-export-{datetime.now(timezone.utc):%Y-%m-%d}.json"
+    return Response(data, media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
+
+@router.delete("/conversations/{conversation_id}", dependencies=[Depends(from_our_pages)])
+def delete_conversation(conversation_id: int, account_id: int = Depends(signed_in)) -> dict:
+    if jobs.waiting(account_id, conversation_id):
+        raise HTTPException(status_code=409, detail="Sidekick is still answering here. Delete it after the reply.")
+    if (upload := uploads.latest(account_id, conversation_id)) is not None:
+        uploads.discard(upload["token"])
+    removed = memory.delete_conversation(account_id, conversation_id)
+    if removed is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return {"deleted": removed}
+
+
+@router.delete("/conversations", dependencies=[Depends(from_our_pages)])
+def delete_all_conversations(account_id: int = Depends(signed_in)) -> dict:
+    uploads.discard_account(account_id)
+    return {"deleted": memory.forget_all(account_id)}
+
+
+class DeleteAccount(BaseModel):
+    confirm: Literal["delete everything"]  # typed by the person, so a stray click can't erase anything
+
+
+@router.post("/account/delete", dependencies=[Depends(from_our_pages)])
+def delete_account(choice: DeleteAccount, account_id: int = Depends(signed_in)) -> Response:
+    """Erase everything about this person and revoke Google access, like /delete_me confirm. Members are removed
+    from Sidekick (coming back needs a new invite); the owner starts again empty. Signs this browser out."""
+    owner = _role(account_id) == "owner"
+    rows = account.delete_everything(account_id)
+    response = Response(json.dumps({"deleted": rows, "removed": not owner}), media_type="application/json")
+    response.delete_cookie(web_login.COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    return response
 
 
 # --- The morning brief on the web ------------------------------------------------------------------------------

@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 from html import escape
 from zoneinfo import ZoneInfo
 
+from urllib.parse import urlencode
+
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
@@ -107,20 +109,29 @@ def echo(payload: EchoRequest) -> dict[str, str]:
 
 
 @app.get("/oauth/google/callback", response_class=HTMLResponse)
-def google_callback(state: str = "", code: str = "", error: str = "") -> HTMLResponse:
-    """Google sends the member's browser here after they sign in (step 3 in app/google_web.py)."""
+def google_callback(request: Request, state: str = "", code: str = "", error: str = ""):
+    """Google sends the member's browser here after they sign in (step 3 in app/google_web.py). A browser signed in to
+    Sidekick Web goes back to its Apps page; one that came from Telegram gets a small page."""
+    web = web_login.account_of(request.cookies.get(web_login.COOKIE)) is not None
+
+    def failed(text: str, status: int = 400):
+        if web:
+            return RedirectResponse(f"/app/apps?{urlencode({'problem': text})}", status_code=303)
+        return page("Not connected", text, status)
     if error or not (state and code):
-        return page("Not connected", "Google sign-in was cancelled. Send /connect in Telegram to try again.", 400)
+        return failed("Google sign-in was cancelled. Try connecting again.")
     try:
         account_id, email, gmail = google_web.finish(state, code)
     except google_web.ConnectError as exc:
-        return page("Not connected", str(exc), 400)
+        return failed(str(exc))
     except VaultError:
         log.exception("Can't store a Google token")
-        return page("Not connected", "Sidekick can't store the connection safely right now. Try again later.", 500)
+        return failed("Sidekick can't store the connection safely right now. Try again later.", 500)
     what = "Google Calendar and Gmail (read-only)" if gmail else "Google Calendar"
     log.info("Google connected for %s (gmail: %s)", account_id, gmail)
     try_it = "\"any important emails today?\"" if gmail else "\"what's on my calendar tomorrow?\""
+    if web:  # the Apps page shows it; Telegram doesn't need to hear about it too
+        return RedirectResponse(f"/app/apps?connected={'gmail' if gmail else 'calendar'}", status_code=303)
     send_to_account(account_id, f"✅ {what} connected{f' ({email})' if email else ''}. Try: {try_it} "
                                 "Send /disconnect to remove access.")
     return page("Connected ✅", f"Your {what} is connected to Sidekick. You can close this page and go back to "

@@ -169,6 +169,17 @@ def forget(account_id: int) -> int:
         return _delete(conn, "account_id = ? AND conversation_id = ?", (account_id, last[0])) if last else 0
 
 
+def delete_conversation(account_id: int, conversation_id: int) -> int | None:
+    """Sidekick Web's delete button: one conversation of this account, even an empty one. Returns how many messages
+    went, or None if it isn't this account's (the same answer as one that doesn't exist)."""
+    with db.connect() as conn:
+        if not _owns(conn, account_id, conversation_id):
+            return None
+        removed = _delete(conn, "account_id = ? AND conversation_id = ?", (account_id, conversation_id))
+        conn.execute("DELETE FROM conversations WHERE id = ? AND account_id = ?", (conversation_id, account_id))
+    return removed
+
+
 def forget_all(account_id: int) -> int:
     """/forget_all: delete every saved conversation of this account, and its old-table copies."""
     with db.connect() as conn:
