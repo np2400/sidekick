@@ -521,8 +521,14 @@ def system_prompt(tools: dict | None = None, tz: str = OWNER_TIMEZONE, now: date
            "Gmail": "Gmail (read-only) is connected the same way (or /connect gmail in Telegram)"}
     no_google = (f"\nThis user has not connected {' or '.join(missing)}: if asked about it, say so instead of "
                  f"guessing; {' and '.join(how[m] for m in missing)}." if missing else "")
+    # Oct 30: asked to remove a task a Todoist email mentioned, the model checked Sidekick's own list and said it had
+    # "checked your Todoist list". Only Sidekick's list is reachable then: say so.
+    own_list = ("\nTasks are kept in Sidekick's own task list. Sidekick isn't connected to Todoist or any other task "
+                "app: if asked to change a task there (for example one an email mentions), say you can't, and offer to "
+                "add it to Sidekick's list. Never say you checked Todoist."
+                if tools is not None and tools.get("list_tasks") is native_tasks.list_tasks else "")
     return (f"{SYSTEM_PROMPT}\nCurrent time: {now.strftime('%A %Y-%m-%d %H:%M')} ({tz}). "
-            f"Tomorrow is {tomorrow}. Then: {ahead}.{no_google}")
+            f"Tomorrow is {tomorrow}. Then: {ahead}.{no_google}{own_list}")
 
 
 def tool_specs(tools: dict) -> list[ToolSpec]:

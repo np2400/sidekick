@@ -203,3 +203,14 @@ def test_real_gmail_reader_trims_long_bodies_and_invisible_characters(monkeypatc
     assert len(result["body"]) == gmail.MAX_BODY == 6000
     assert result["truncated"] is True
     assert "​" not in result["body"]
+
+
+def test_with_sidekicks_own_task_list_the_model_is_told_todoist_is_not_connected():
+    """Oct 30: it claimed to have 'checked your Todoist list' when only Sidekick's own list exists."""
+    from app import native_tasks
+    from app.agent import MEMBER_TOOLS, system_prompt
+    prompt = system_prompt(MEMBER_TOOLS)
+    assert "Sidekick isn't connected to Todoist" in prompt and "Never say you checked Todoist" in prompt
+    assert "Todoist" not in system_prompt({})  # a registry without Sidekick's list: nothing claimed either way
+    note = native_tasks.list_tasks(ctx=ToolContext(chat_id=5))["note"]
+    assert note.startswith("Sidekick's own task list, not Todoist")

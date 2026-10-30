@@ -20,7 +20,8 @@ def list_tasks(query: str = "today | overdue", *, ctx) -> dict:
                             (ctx.chat_id,)).fetchall()
     tasks = [{"id": r["id"], "content": r["title"], "due": r["due"]} for r in rows]
     return {"query": query, "count": len(tasks), "tasks": tasks,
-            "note": "Built-in task list: all open tasks are shown regardless of the filter."}
+            "note": "Sidekick's own task list, not Todoist or any other app: all open tasks are shown regardless of "
+                    "the filter."}
 
 
 def complete_task(task_id: int, *, ctx) -> dict:
