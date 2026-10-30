@@ -386,6 +386,8 @@ code {
 .rows li:last-child { border-bottom: none; }
 .brief-text { margin: 0; white-space: pre-wrap; }
 .brief-made { margin: 10px 0 0; }
+.welcome-steps { margin: 0; padding-left: 22px; display: grid; gap: 8px; }
+.welcome { border-color: var(--accent); }
 .panel-action { margin-left: auto; }
 
 /* Settings: the morning brief form */

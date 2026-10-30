@@ -20,9 +20,9 @@ export default function SignIn() {
 
         <div className="divider" />
         <p className="muted small">
-          <strong>First time here?</strong> Sidekick is invite-only. If you use it in Telegram, send <code>/web</code> to
-          the bot and open the link it gives you: that connects your Google account once, and from then on this button
-          signs you in.
+          <strong>First time here?</strong> Sidekick is invite-only: open the invite link you were sent, and sign in
+          with Google there. If you already use Sidekick in Telegram, send <code>/web</code> to the bot and open the
+          link it gives you; from then on this button signs you in.
         </p>
         <a className="text-link" href="https://t.me/Np_Sidekick_bot" target="_blank" rel="noreferrer">
           Open Sidekick in Telegram <Icon name="external" size={14} />

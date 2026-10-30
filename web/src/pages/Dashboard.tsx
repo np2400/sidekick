@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { getBrief, listReminders, listTasks, makeBrief, type LatestBrief, type Result } from "../api";
 import { ButtonLink, EmptyState, PageHeader, Skeleton } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
@@ -76,7 +76,30 @@ function BriefCard() {
   );
 }
 
+/** Right after joining from an invite: the three things that make Sidekick useful, each one tap away. */
+function Welcome({ onDone }: { onDone: () => void }) {
+  return (
+    <section className="card panel wide welcome" aria-label="Welcome">
+      <header className="panel-head">
+        <span className="panel-icon"><Icon name="sparkles" size={18} /></span>
+        <h2>Welcome to Sidekick</h2>
+        <button className="btn btn-ghost btn-sm panel-action" onClick={onDone}>Got it</button>
+      </header>
+      <ol className="welcome-steps">
+        <li><Link className="text-link" to="/app/settings">Turn on notifications</Link> on this device, so reminders
+          reach you. On iPhone, first add Sidekick to your home screen (Share, then Add to Home Screen).</li>
+        <li><Link className="text-link" to="/app/apps">Connect Google</Link> if you'd like Sidekick to read your
+          calendar, and optionally your email (read-only).</li>
+        <li><Link className="text-link" to="/app/settings">Turn on your morning brief</Link> and pick a time.</li>
+        <li><Link className="text-link" to="/app/chat">Ask anything</Link>, e.g. "remind me to call Mom tomorrow at
+          10".</li>
+      </ol>
+    </section>
+  );
+}
+
 export default function Dashboard() {
+  const [params, setParams] = useSearchParams();
   const reminders = useResult(listReminders);
   const tasks = useResult(listTasks);
   const now = new Date();
@@ -88,6 +111,7 @@ export default function Dashboard() {
         actions={<ButtonLink to="/app/chat" variant="secondary"><Icon name="chat" size={16} /> Conversations</ButtonLink>} />
 
       <div className="dash-grid">
+        {params.get("welcome") && <Welcome onDone={() => setParams({}, { replace: true })} />}
         <BriefCard />
         <Panel icon="bell" title="Reminders" result={reminders}>
           {(items) => items.length ? (
@@ -98,7 +122,7 @@ export default function Dashboard() {
               </li>
             ))}</ul>
           ) : <EmptyState compact icon="bell" title="No upcoming reminders"
-              body={<>Try in Telegram: <code>remind me to call Mom tomorrow at 10</code></>} />}
+              body={<>Ask in Chat: <code>remind me to call Mom tomorrow at 10</code></>} />}
         </Panel>
         <Panel icon="listChecks" title="Tasks" result={tasks}>
           {({ tasks: items, elsewhere }) => elsewhere ? <p className="muted">{elsewhere}</p> : items.length ? (
@@ -106,7 +130,7 @@ export default function Dashboard() {
               <li key={t.id}><span>{t.title}</span>{t.due && <span className="muted small">{t.due}</span>}</li>
             ))}</ul>
           ) : <EmptyState compact icon="listChecks" title="No open tasks"
-              body={<>Try in Telegram: <code>add a task to buy milk</code></>} />}
+              body={<>Ask in Chat: <code>add a task to buy milk</code></>} />}
         </Panel>
       </div>
     </div>

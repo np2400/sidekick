@@ -37,7 +37,7 @@ export type BriefPrefs = { interests: string; hidden: string[]; categories: Reco
 export type GoogleLink = { managed: "server" | "you"; calendar: boolean; gmail: boolean; email: string | null };
 export type Connections = { google: GoogleLink; telegram: boolean; sign_in: string | null };
 export type Preferences = {
-  timezone: string; brief_time: string | null;
+  timezone: string; timezone_set: boolean; brief_time: string | null;
   brief: BriefPrefs;
   telegram: boolean;                 // linked to Telegram
   telegram_notifications: boolean;   // reminders and the brief also go there
@@ -179,6 +179,22 @@ export const setTelegramNotifications = (on: boolean) =>
 /** The sidebar listens for this: a new conversation, or a new message moving one to the top. */
 export const CONVERSATIONS_CHANGED = "sidekick:conversations-changed";
 export const conversationsChanged = () => window.dispatchEvent(new Event(CONVERSATIONS_CHANGED));
+
+/** So "remind me at 9" means 9 where you are: an IANA name like "Asia/Kolkata". */
+export const setTimezone = (timezone: string) => post<Preferences>("settings/timezone", { timezone });
+/** This device's timezone, as the browser knows it. */
+export const deviceTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/** For the owner: who's here (activity, never content), a one-time invite link, and ending someone's access. */
+export type Member = {
+  id: number; name: string; status: "active" | "removed"; joined: string; last_active: string | null;
+  requests_7d: number; calendar: boolean; gmail: boolean; logins: string[];
+};
+export const getMembers = () => get<Member[]>("members");
+/** Signs out every browser on this account, this one included. */
+export const signOutEverywhere = () => post<{ ended: number }>("sessions/end-all");
+export const createInvite = () => post<{ url: string; hours: number }>("invites");
+export const removeMember = (id: number) => post<Member[]>(`members/${id}/remove`);
 
 /** Google's sign-in page for this account (Calendar, plus read-only Gmail if asked). The browser goes there and
  *  comes back to the Apps page with ?connected= or ?problem=. */

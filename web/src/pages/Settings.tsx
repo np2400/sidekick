@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { conversationsChanged, deleteAccount, deleteAllConversations, EXPORT_URL, getPreferences, getSession,
-  saveBriefSettings, setTelegramNotifications, signOut, type Preferences } from "../api";
-import { PageHeader, PreviewPill, TelegramHint } from "../components/Common";
+import { conversationsChanged, createInvite, deleteAccount, deleteAllConversations, deviceTimezone, EXPORT_URL,
+  getMembers, getPreferences, getSession, removeMember, saveBriefSettings, setTelegramNotifications, setTimezone,
+  signOut, signOutEverywhere, type Member, type Preferences } from "../api";
+import { PageHeader, PreviewPill } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
 import Notifications from "../components/Notifications";
 import ThemeSwitch from "../components/ThemeSwitch";
@@ -78,6 +79,86 @@ function BriefSettings({ initial }: { initial: Preferences }) {
   );
 }
 
+/** The timezone Sidekick uses for this person, and this device's, if it's different. */
+function TimezoneRow({ initial }: { initial: string }) {
+  const [zone, setZone] = useState(initial);
+  const [problem, setProblem] = useState<string | null>(null);
+  const here = deviceTimezone();
+
+  async function useHere() {
+    const result = await setTimezone(here);
+    if (result.state === "ready") setZone(result.data.timezone);
+    else setProblem(result.state === "unavailable" ? result.reason : "Sign in again, then try once more.");
+  }
+
+  return (
+    <Row icon="globe" title={`Timezone: ${zone}`}
+      body={problem ?? (zone === here ? "So \"remind me at 9\" means 9 where you are. It matches this device."
+        : `So "remind me at 9" means 9 where you are. This device is set to ${here}.`)}
+      control={zone !== here && <button className="btn btn-secondary btn-sm" onClick={useHere}>Use {here}</button>} />
+  );
+}
+
+const lastSeen = (iso: string | null) => (iso ? new Date(iso.replace(" ", "T") + "Z").toLocaleDateString(undefined,
+  { month: "short", day: "numeric" }) : "never");
+
+/** For the owner: a one-time invite link, and who's here (activity and connections, never what anyone wrote). */
+function Members() {
+  const loaded = useResult(getMembers);
+  const [members, setMembers] = useState<Member[] | null>(null);
+  const [invite, setInvite] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  useEffect(() => { if (loaded?.state === "ready") setMembers(loaded.data); }, [loaded]);
+
+  async function newInvite() {
+    const result = await createInvite();
+    if (result.state === "ready") {
+      setInvite(result.data.url);
+      setStatus(`Works once, for one person, for ${result.data.hours} hours. They sign in with Google; no Telegram needed.`);
+    } else setStatus(result.state === "unavailable" ? result.reason : "Sign in again, then try once more.");
+  }
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(invite!);
+      setStatus("Copied. Send it to the person you're inviting.");
+    } catch {
+      setStatus("Couldn't copy: select the link and copy it.");
+    }
+  }
+
+  async function remove(m: Member) {
+    if (!window.confirm(`Remove ${m.name || "this member"}? They're signed out everywhere, their reminders stop and `
+      + "their Google access is revoked. Their data stays until they or you delete it.")) return;
+    const result = await removeMember(m.id);
+    if (result.state === "ready") setMembers(result.data);
+    else setStatus(result.state === "unavailable" ? result.reason : "Sign in again, then try once more.");
+  }
+
+  return (
+    <>
+      <Row icon="users" title="Invite someone" body="A one-time link to join Sidekick with Google."
+        control={<button className="btn btn-secondary btn-sm" onClick={newInvite}>Create invite link</button>} />
+      {invite && (
+        <div className="danger-confirm">
+          <input className="text-input" readOnly value={invite} aria-label="Invite link"
+            onFocus={(e) => e.target.select()} />
+          <button className="btn btn-secondary btn-sm" onClick={copy}><Icon name="copy" size={14} /> Copy</button>
+        </div>
+      )}
+      {status && <p className="muted small brief-field" role="status">{status}</p>}
+      {members?.map((m) => (
+        <Row key={m.id} icon="user" title={`${m.name || "Unnamed"}${m.status === "removed" ? " (removed)" : ""}`}
+          body={`${m.logins.join(" + ") || "no login"} · joined ${lastSeen(m.joined)} · last active ${lastSeen(m.last_active)} · `
+            + `${m.requests_7d} requests in 7 days${m.calendar ? " · Calendar" : ""}${m.gmail ? " · Gmail" : ""}`}
+          control={m.status === "active" && (
+            <button className="btn btn-secondary btn-sm" onClick={() => remove(m)}>Remove</button>)} />
+      ))}
+      {members?.length === 0 && <p className="muted small brief-field">No members yet.</p>}
+    </>
+  );
+}
+
 const CONFIRM = "delete everything";
 
 /** Export, delete all conversations, delete the account: the same as /export, /forget_all and /delete_me. */
@@ -130,10 +211,6 @@ function DataControls({ owner, onGone }: { owner: boolean; onGone: () => void })
   );
 }
 
-const Unavailable = ({ label }: { label: string }) => (
-  <button className="btn btn-secondary btn-sm" disabled aria-disabled="true" title="Not connected yet">{label}</button>
-);
-
 export default function Settings() {
   const navigate = useNavigate();
   const session = useResult(getSession);
@@ -165,7 +242,12 @@ export default function Settings() {
             {me.telegram ? " · linked to your Telegram" : ""}{me.role === "owner" ? " · owner" : ""}</> : ""}
           control={me && <button className="btn btn-secondary btn-sm" onClick={leave}>Sign out</button>} />
         <Row icon="logout" title="Sign out everywhere"
-          body={<>Signs out every browser at once. <TelegramHint>/signout_web</TelegramHint></>} />
+          body="Signs out every browser and phone at once, this one included."
+          control={<button className="btn btn-secondary btn-sm" onClick={async () => {
+            if (!window.confirm("Sign out of Sidekick Web on every device, this one included?")) return;
+            await signOutEverywhere();
+            navigate("/app/signin", { replace: true });
+          }}>Sign out everywhere</button>} />
       </Section>
 
       <Section title="Notifications">
@@ -189,10 +271,14 @@ export default function Settings() {
       </Section>
 
       <Section title="Preferences">
-        <Row icon="globe" title={`Timezone${values ? `: ${values.timezone}` : ""}`}
-          body={<>So "remind me at 9" means 9 where you are. <TelegramHint>/timezone</TelegramHint></>}
-          control={<Unavailable label="Change" />} />
+        {values ? <TimezoneRow initial={values.timezone} /> : <p className="muted small brief-field">Loading…</p>}
       </Section>
+
+      {me?.role === "owner" && (
+        <Section title="Members">
+          <Members />
+        </Section>
+      )}
 
       <Section title="Privacy and data">
         <DataControls owner={me?.role === "owner"} onGone={() => navigate("/", { replace: true })} />

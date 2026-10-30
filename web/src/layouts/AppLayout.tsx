@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { CONVERSATIONS_CHANGED, getNotifications, getSession, listConversations, signOut } from "../api";
+import { CONVERSATIONS_CHANGED, deviceTimezone, getNotifications, getPreferences, getSession, listConversations,
+  setTimezone, signOut } from "../api";
 import { NOTIFICATIONS_READ } from "../pages/NotificationsPage";
 import { EmptyState, Logo, PreviewPill, Skeleton } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
@@ -40,6 +41,10 @@ export default function AppLayout() {
     window.addEventListener(NOTIFICATIONS_READ, count);
     return () => { alive = false; window.removeEventListener(NOTIFICATIONS_READ, count); };
   }, [pathname]);
+
+  useEffect(() => {  // someone who joined on the web never sent /timezone: use this device's, once
+    getPreferences().then((r) => { if (r.state === "ready" && !r.data.timezone_set) setTimezone(deviceTimezone()); });
+  }, []);
 
   useEffect(() => setOpen(false), [pathname]);  // a tap on a link closes the drawer
   useEffect(() => {
