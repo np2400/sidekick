@@ -13,6 +13,13 @@ def timezone_of(chat_id: int) -> str:
     return (row and row["timezone"]) or OWNER_TIMEZONE
 
 
+def timezone_chosen(chat_id: int) -> bool:
+    """Has this person set a timezone? Sidekick Web sets one from the device on first use (W7c)."""
+    with db.connect() as conn:
+        row = conn.execute("SELECT timezone FROM settings WHERE chat_id = ?", (chat_id,)).fetchone()
+    return bool(row and row["timezone"])
+
+
 def brief_time_of(chat_id: int) -> str | None:
     """'HH:MM', '' if turned off, or None if never set (the caller picks the default)."""
     with db.connect() as conn:

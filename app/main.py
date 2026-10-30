@@ -154,9 +154,9 @@ def same_origin(request: Request) -> bool:
     return request.headers.get("origin") == web_login.origin()
 
 
-def into_the_app(session: str) -> RedirectResponse:
+def into_the_app(session: str, path: str = "/app/") -> RedirectResponse:
     """Signed in: set the session cookie and open the web app (/app, served by Caddy from web/)."""
-    response = RedirectResponse("/app/", status_code=303)
+    response = RedirectResponse(path, status_code=303)
     response.set_cookie(web_login.COOKIE, session, max_age=web_login.SESSION_DAYS * 86400, path="/", secure=True,
                         httponly=True, samesite="lax")  # HttpOnly: page scripts can't read it
     return response
@@ -171,6 +171,17 @@ def web_link(code: str = "") -> Response:
         return RedirectResponse(web_login.start(code), status_code=303)
     except web_login.LoginError as exc:
         return page("Link expired", str(exc), 400)
+
+
+@app.get("/join", response_class=HTMLResponse)
+def web_join(code: str = "") -> Response:
+    """A web invite link (W7c): on to Google's sign-in. The invite is only used up once the sign-in comes back."""
+    if not web_login.configured():
+        return page("Not available", "Sidekick Web isn't set up on this server yet.", 503)
+    try:
+        return RedirectResponse(web_login.start(invite=code), status_code=303)
+    except web_login.LoginError as exc:
+        return page("Invite expired", str(exc), 400)
 
 
 @app.get("/auth/google/start")
@@ -190,15 +201,16 @@ def web_sign_in_callback(state: str = "", code: str = "", error: str = "") -> Re
     except web_login.LoginError as exc:
         return page("Not signed in", str(exc), 400)
     if outcome["result"] == "unknown":
-        return page("Sidekick is invite-only", "This Google account isn't linked to Sidekick. If you use Sidekick "
-                                               "in Telegram, send /web there and open the link it gives you.", 403)
+        return page("Sidekick is invite-only", "This Google account isn't part of Sidekick. To join, open the invite "
+                                               "link you were sent. If you use Sidekick in Telegram, send /web there "
+                                               "and open the link it gives you.", 403)
     if outcome["result"] == "confirm":
         whose = f"{outcome['name']}'s" if outcome["name"] else "your"
         return page("Link your account?", f"Add Google {outcome['email']} to {whose} Sidekick account? "
                                           "You'll then sign in to Sidekick Web with it.",
                     extra=f"<form method=post action=/auth/link/confirm><input type=hidden name=pending "
                           f"value='{escape(outcome['pending'])}'><button>Link</button> <a href=/>Cancel</a></form>")
-    return into_the_app(outcome["session"])
+    return into_the_app(outcome["session"], "/app/?welcome=1" if outcome.get("joined") else "/app/")
 
 
 @app.post("/auth/link/confirm", response_class=HTMLResponse)
@@ -716,7 +728,9 @@ def invite_text(owner_id: int) -> str:
     code = users.create_invite(owner_id)
     username = bot_username()
     how = f"https://t.me/{username}?start={code}" if username else f"Have them send the bot: /start {code}"
-    return f"Invite (works once, expires in {users.INVITE_HOURS} hours). Send this to your friend:\n{how}"
+    web = f"\nOr on the web, no Telegram needed: {web_login.origin()}/join?code={code}" if web_login.configured() else ""
+    return (f"Invite (works once, by one person, expires in {users.INVITE_HOURS} hours). Send this to your friend:"
+            f"\nIn Telegram: {how}{web}")
 
 
 def agent_reply(ctx: ToolContext, text: str, images: list | None = None,

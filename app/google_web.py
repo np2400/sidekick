@@ -134,7 +134,8 @@ def access_token(chat_id: int) -> str:
         row = conn.execute("SELECT email, token_encrypted FROM google_accounts WHERE chat_id = ?",
                            (chat_id,)).fetchone()
     if row is None:
-        raise GoogleAuthError("Google isn't connected for this user. Send /connect to connect it.")
+        raise GoogleAuthError("Google isn't connected for this user. Connect it on the Apps page in Sidekick Web, "
+                              "or send /connect in Telegram.")
     token = vault.unlock(row["token_encrypted"])
     if time.time() < token["expires_at"] - 60:
         return token["access_token"]
@@ -144,7 +145,8 @@ def access_token(chat_id: int) -> str:
     }, timeout=15)
     if response.status_code != 200:  # invalid_grant: access revoked at Google, or the password changed
         log.error("Google refresh failed for %s: HTTP %s", chat_id, response.status_code)
-        raise GoogleAuthError("Google access for this account has expired. Send /connect to reconnect.")
+        raise GoogleAuthError("Google access for this account has expired. Connect it again on the Apps page in "
+                              "Sidekick Web, or send /connect in Telegram.")
     fresh = response.json()
     token.update(access_token=fresh["access_token"], expires_at=time.time() + fresh.get("expires_in", 3600))
     _save(chat_id, row["email"], token)

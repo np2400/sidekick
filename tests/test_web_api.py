@@ -78,7 +78,7 @@ def test_reminders_tasks_and_settings_are_your_own(people):
     me, dad = people(OWNER), people(DAD)
     assert [r["text"] for r in me.get("/api/reminders").json()] == ["Neel's reminder"]
     assert [t["title"] for t in dad.get("/api/tasks").json()["tasks"]] == ["Dad's task"]
-    assert me.get("/api/settings").json().keys() == {"timezone", "brief_time", "brief", "telegram",
+    assert me.get("/api/settings").json().keys() == {"timezone", "timezone_set", "brief_time", "brief", "telegram",
                                                      "telegram_notifications"}
     assert me.get("/api/me").json() == {"name": "Neel", "role": "owner", "telegram": True, "google": None}
     assert dad.get("/api/me").json()["role"] == "member"

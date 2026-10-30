@@ -7,7 +7,9 @@ Calendar (that's /connect, a separate consent).
 3. callback         -> finish(): swap the code for Google's ID token, check it, then:
    - a Google account linked before: signed in (a session)
    - a /web link: a confirm page, "Add Google you@gmail.com to Neel's Sidekick account?" -> confirm_link()
-   - neither: nothing is stored ("Sidekick is invite-only")
+   - a web invite (/join?code=..., W7c): a new member account with this Google login, or, for someone already
+     in Sidekick, just signed in (the invite stays unused)
+   - none of these: nothing is stored ("Sidekick is invite-only")
 Google's tokens are discarded right away: only its stable account id ("sub") and the email are kept.
 
 Sessions: the cookie holds a random value, the database only its SHA-256. They end 30 days after last use, at
@@ -68,8 +70,10 @@ def link_code(account_id: int) -> str:
 
 # --- 2. Off to Google ---------------------------------------------------------------------------------------
 
-def start(code: str | None = None) -> str:
-    """Google's sign-in page for this sign-in. With a /web code, the code must still be valid."""
+def start(code: str | None = None, invite: str | None = None) -> str:
+    """Google's sign-in page for this sign-in. With a /web code or an invite, it must still be valid."""
+    if invite is not None and not users.invite_open(invite):
+        raise LoginError("This invite has expired or was already used. Ask for a new invite link.")
     if code is not None:
         with db.connect() as conn:
             valid = conn.execute("SELECT 1 FROM link_codes WHERE code_hash = ? AND used_at IS NULL AND "
@@ -83,6 +87,10 @@ def start(code: str | None = None) -> str:
         conn.execute("INSERT INTO login_states (state_hash, code_verifier, nonce, link_code_hash, expires_at) "
                      "VALUES (?, ?, ?, ?, datetime('now', ?))",
                      (_hash(state), verifier, nonce, _hash(code) if code else None, f"+{LINK_MINUTES} minutes"))
+        if invite is not None:
+            conn.execute("DELETE FROM login_invites WHERE expires_at < datetime('now')")
+            conn.execute("INSERT INTO login_invites (state_hash, invite_hash, expires_at) "
+                         "VALUES (?, ?, datetime('now', ?))", (_hash(state), _hash(invite), f"+{LINK_MINUTES} minutes"))
     return AUTH_URI + "?" + urllib.parse.urlencode({
         "client_id": GOOGLE_WEB_CLIENT_ID, "redirect_uri": redirect_uri(), "response_type": "code",
         "scope": "openid email", "state": state, "nonce": nonce, "prompt": "select_account",
@@ -93,18 +101,28 @@ def start(code: str | None = None) -> str:
 # --- 3. Back from Google ------------------------------------------------------------------------------------
 
 def finish(state: str, code: str) -> dict:
-    """{"result": "signed_in", "session": ..., "account_id": ...}, or {"result": "confirm", "pending": ...,
-    "name": ..., "email": ...}, or {"result": "unknown"}. Raises LoginError for anything that doesn't check out."""
+    """{"result": "signed_in", "session": ..., "account_id": ..., "joined": bool}, or {"result": "confirm",
+    "pending": ..., "name": ..., "email": ...}, or {"result": "unknown"}. Raises LoginError for anything that doesn't
+    check out."""
     with db.connect() as conn:  # claim the state: valid, unexpired, used once
         row = conn.execute("SELECT code_verifier, nonce, link_code_hash FROM login_states WHERE state_hash = ? "
                            "AND expires_at > datetime('now')", (_hash(state),)).fetchone()
         claimed = conn.execute("DELETE FROM login_states WHERE state_hash = ?", (_hash(state),)).rowcount
+        invite = conn.execute("SELECT invite_hash FROM login_invites WHERE state_hash = ?", (_hash(state),)).fetchone()
+        conn.execute("DELETE FROM login_invites WHERE state_hash = ?", (_hash(state),))
     if row is None or claimed != 1:
         raise LoginError("This sign-in has expired or was already used. Please start again.")
     sub, email = _google_identity(code, row["code_verifier"], row["nonce"])
     known = users.account_for("google", sub)
 
-    if row["link_code_hash"] is None:  # a plain sign-in
+    if invite is not None and known is None:  # a web invite, for someone new: join
+        account = users.join_with_google(invite["invite_hash"], sub, email)
+        if account is None:
+            raise LoginError("This invite has expired or was already used. Ask for a new invite link.")
+        log.info("New member %s joined from a web invite", account)
+        return {"result": "signed_in", "session": new_session(account), "account_id": account, "joined": True}
+
+    if row["link_code_hash"] is None:  # a plain sign-in (or an invite opened by someone already in Sidekick)
         if known is None:
             log.info("Sign-in by a Google account that isn't linked to any Sidekick account")  # nothing stored
             return {"result": "unknown"}

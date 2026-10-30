@@ -291,12 +291,24 @@ def connection_list(account_id: int = Depends(signed_in)) -> dict:
 
 @router.get("/settings")
 def preferences(account_id: int = Depends(signed_in)) -> dict:
-    return {"timezone": settings.timezone_of(account_id),
+    return {"timezone": settings.timezone_of(account_id), "timezone_set": settings.timezone_chosen(account_id),
             "brief_time": daily.brief_time_for(account_id, _role(account_id)) or None,
             "brief": {**settings.brief_preferences(account_id), "categories": settings.CATEGORIES,
                       "max_interests": settings.MAX_INTERESTS},
             "telegram": users.telegram_chat(account_id) is not None,
             "telegram_notifications": notifications.telegram_on(account_id)}
+
+
+class TimezoneChoice(BaseModel):
+    timezone: str = Field(max_length=64)  # an IANA name, e.g. "Asia/Kolkata", from the device or picked
+
+
+@router.post("/settings/timezone", dependencies=[Depends(from_our_pages)])
+def timezone_setting(choice: TimezoneChoice, account_id: int = Depends(signed_in)) -> dict:
+    """So "remind me at 9" means 9 where this person is. The same as /timezone in Telegram."""
+    if settings.set_timezone(account_id, choice.timezone) is None:
+        raise HTTPException(status_code=422, detail="That isn't a timezone Sidekick knows, e.g. America/Los_Angeles.")
+    return preferences(account_id)
 
 
 class BriefChoice(BaseModel):
@@ -395,6 +407,49 @@ def delete_account(choice: DeleteAccount, account_id: int = Depends(signed_in)) 
     response = Response(json.dumps({"deleted": rows, "removed": not owner}), media_type="application/json")
     response.delete_cookie(web_login.COOKIE, path="/", secure=True, httponly=True, samesite="lax")
     return response
+
+
+@router.post("/sessions/end-all", dependencies=[Depends(from_our_pages)])
+def sign_out_everywhere(account_id: int = Depends(signed_in)) -> Response:
+    """Every browser signed in to this account, this one included: the same as /signout_web in Telegram."""
+    ended = web_login.end_all_sessions(account_id)
+    response = Response(json.dumps({"ended": ended}), media_type="application/json")
+    response.delete_cookie(web_login.COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    return response
+
+
+# --- Invites and members, for the owner (W7c): the same as /invite, /users and /remove in Telegram -------------
+
+def owner_only(account_id: int = Depends(signed_in)) -> int:
+    if _role(account_id) != "owner":
+        raise HTTPException(status_code=403, detail="Only the owner manages members.")
+    return account_id
+
+
+@router.post("/invites", dependencies=[Depends(from_our_pages)])
+def new_invite(account_id: int = Depends(owner_only)) -> dict:
+    """A web invite link: one person, once, within 24 hours. They sign in with Google and become a member."""
+    code = users.create_invite(account_id)
+    return {"url": f"{web_login.origin()}/join?code={code}", "hours": users.INVITE_HOURS}
+
+
+@router.get("/members")
+def member_list(account_id: int = Depends(owner_only)) -> list[dict]:
+    """Who's here, how they log in, how active, what's connected. Never what anyone wrote."""
+    return [{"id": m["account_id"], "name": m["name"], "status": m["status"], "joined": m["joined_at"],
+             "last_active": m["last_active"], "requests_7d": m["requests_7d"], "calendar": m["calendar"],
+             "gmail": m["gmail"], "logins": sorted(users.profile(m["account_id"])["logins"])}
+            for m in account.members_overview(account_id)]
+
+
+@router.post("/members/{member_id}/remove", dependencies=[Depends(from_our_pages)])
+def remove_member(member_id: int, account_id: int = Depends(owner_only)) -> list[dict]:
+    """End a member's access: signed out everywhere, reminders stopped, Google revoked. Their data stays until they
+    or the owner delete it (like /remove without 'delete')."""
+    if member_id == account_id or not users.active(member_id):
+        raise HTTPException(status_code=404, detail="not found")
+    account.remove_member(member_id)
+    return member_list(account_id)
 
 
 # --- The morning brief on the web ------------------------------------------------------------------------------

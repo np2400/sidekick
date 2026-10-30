@@ -31,7 +31,8 @@ NEW_TABLES = {"accounts", "identities", "conversations", "chat_messages",  # 009
               "action_conversations",  # 013
               "push_subscriptions",  # 014
               "notifications", "notification_sends", "notification_settings",  # 015
-              "brief_preferences", "briefs"}  # 016: the rest must not change
+              "brief_preferences", "briefs",  # 016
+              "login_invites"}  # 017: the rest must not change
 
 
 def open_db(path: Path):

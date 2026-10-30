@@ -516,7 +516,9 @@ def system_prompt(tools: dict | None = None, tz: str = OWNER_TIMEZONE, now: date
     missing = [] if tools is None else [service for service, tool in
                                         (("Google Calendar", "list_events"), ("Gmail", "search_emails"))
                                         if tool not in tools]
-    how = {"Google Calendar": "/connect links their Google Calendar", "Gmail": "/connect gmail adds Gmail (read-only)"}
+    how = {"Google Calendar": "they can connect Google Calendar on the Apps page in Sidekick Web (or /connect in "
+                              "Telegram)",
+           "Gmail": "Gmail (read-only) is connected the same way (or /connect gmail in Telegram)"}
     no_google = (f"\nThis user has not connected {' or '.join(missing)}: if asked about it, say so instead of "
                  f"guessing; {' and '.join(how[m] for m in missing)}." if missing else "")
     return (f"{SYSTEM_PROMPT}\nCurrent time: {now.strftime('%A %Y-%m-%d %H:%M')} ({tz}). "

@@ -180,7 +180,7 @@ def test_the_home_page_is_the_landing_page_and_googles_required_pages_stay():
     home = caddy.split("handle / {", 1)[1].split("}", 1)[0]
     assert "root * /web/dist" in home and "rewrite * /index.html" in home
     for route in ("handle /privacy {", "handle /auth/* {", "handle /oauth/google/callback {", "handle /api/* {",
-                  "handle_path /app/* {", "handle /telegram/webhook {", "handle /link {"):
+                  "handle_path /app/* {", "handle /telegram/webhook {", "handle /link {", "handle /join {"):
         assert route in caddy, route
     landing = (REPO / "web" / "src" / "pages" / "Landing.tsx").read_text()
     layout = (REPO / "web" / "src" / "layouts" / "PublicLayout.tsx").read_text()

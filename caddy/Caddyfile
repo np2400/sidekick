@@ -21,6 +21,10 @@
 	handle /link {
 		reverse_proxy sidekick:8000
 	}
+	# A web invite link (W7c): someone new joins with Google, no Telegram needed.
+	handle /join {
+		reverse_proxy sidekick:8000
+	}
 	handle /auth/* {
 		reverse_proxy sidekick:8000
 	}

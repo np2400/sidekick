@@ -1,6 +1,6 @@
 """Who may use Sidekick: the owner (TELEGRAM_OWNER_ID) plus members who joined with a one-time invite.
 
-An account is a person in Sidekick; an identity is one way they log in (telegram:<id> today). Everything a person
+An account is a person in Sidekick; an identity is one way they log in (telegram:<id>, google:<sub>). Everything a person
 owns is stored under their account id. Accounts that came from Telegram happen to use their Telegram id as account
 id (migration 009 rewrote nothing), but code must never rely on that: telegram_chat() finds where to send.
 The `users` table is still written as before so the previous version of Sidekick can run on this database.
@@ -46,6 +46,34 @@ def redeem(code: str, telegram_id: int, name: str) -> bool:
                          "(SELECT created_by FROM invites WHERE code_hash = ?) WHERE id = ?",
                          (name[:64], _fingerprint(code), account))
     return claimed
+
+
+def invite_open(code: str) -> bool:
+    """Is this invite still usable (unused, unexpired)? Checked before sending someone to Google; claimed after."""
+    with db.connect() as conn:
+        return conn.execute("SELECT 1 FROM invites WHERE code_hash = ? AND used_by IS NULL AND "
+                            "expires_at > datetime('now')", (_fingerprint(code),)).fetchone() is not None
+
+
+def join_with_google(code_hash: str, google_sub: str, email: str) -> int | None:
+    """Someone opened a web invite and signed in with a Google account Sidekick doesn't know: claim the invite (once,
+    unexpired) and create their account, with this Google login. Returns the new account id, or None if the invite
+    was used or expired meanwhile. Web-born accounts get a random negative id: never a Telegram id, never reused."""
+    with db.connect() as conn:
+        account = -(secrets.randbelow(2**31 - 1) + 1)
+        while conn.execute("SELECT 1 FROM accounts WHERE id = ?", (account,)).fetchone():
+            account = -(secrets.randbelow(2**31 - 1) + 1)
+        claimed = conn.execute(
+            "UPDATE invites SET used_by = ?, used_at = datetime('now') "
+            "WHERE code_hash = ? AND used_by IS NULL AND expires_at > datetime('now')", (account, code_hash)).rowcount
+        if claimed != 1:
+            return None
+        conn.execute("INSERT INTO accounts (id, name, invited_by) "
+                     "SELECT ?, ?, created_by FROM invites WHERE code_hash = ?",
+                     (account, email.split("@")[0][:64], code_hash))
+        conn.execute("INSERT INTO identities (provider, subject, account_id, label) VALUES ('google', ?, ?, ?)",
+                     (google_sub, account, email))
+    return account
 
 
 def ensure_owner(telegram_id: int) -> int:
