@@ -145,5 +145,5 @@ Sidekick's own pages (Origin check); push endpoints are limited to known push se
 
 ## About
 
-Built by Neel Parekh, from the first webhook to the AWS deploy, to learn the engineering behind production AI
-assistants: APIs and webhooks, OAuth, LLM tool calling, evaluation, and running a service people rely on.
+Designed, built and run by Neel Parekh, from the first webhook to the AWS deploy: APIs and webhooks, OAuth, LLM
+tool calling, evaluation, and operating a service people rely on every day.
