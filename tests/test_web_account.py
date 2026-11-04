@@ -4,9 +4,11 @@
 Owner Neel = 111 (Google through the server's own sign-in), member Dad = 222, member Sam = 333.
 """
 import json
+import time
 import urllib.parse
 from datetime import datetime, timedelta
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -76,7 +78,7 @@ def test_from_telegram_the_callback_still_shows_its_own_page(web):
     assert page.status_code == 200 and "Connected" in page.text
 
 
-def test_disconnect_removes_only_your_own_google_and_the_owner_uses_the_servers(web):
+def test_disconnect_removes_only_your_own_google_and_the_owner_can_connect_theirs(web):
     for who in (DAD, SAM):
         google_web.finish(state_from(google_web.start(who)), "code")
     after = web(DAD).post("/api/google/disconnect").json()
@@ -84,8 +86,27 @@ def test_disconnect_removes_only_your_own_google_and_the_owner_uses_the_servers(
     assert google_web.connection(SAM) is not None  # Sam's connection untouched
 
     owner = web(OWNER)
-    assert owner.post("/api/google/connect", json={"gmail": True}).status_code == 409
-    assert owner.post("/api/google/disconnect").status_code == 409
+    assert owner.post("/api/google/disconnect").status_code == 409  # nothing connected here: the server's stays
+    url = owner.post("/api/google/connect", json={"gmail": False}).json()["url"]
+    assert "gmail.readonly" in urllib.parse.unquote(url)  # the owner's Sidekick always offers Gmail: both, always
+    owner.get("/oauth/google/callback", params={"state": state_from(url), "code": "c"})
+    shown = owner.get("/api/connections").json()
+    assert shown["owner"] is True and shown["google"]["managed"] == "you" and shown["google"]["gmail"] is True
+    assert owner.post("/api/google/disconnect").json()["google"]["managed"] == "server"  # back to the server's
+
+
+def test_the_apps_page_says_when_google_stopped_accepting_a_sign_in(web, monkeypatch):
+    """Nov 1: the owner's sign-in had expired at Google, yet the Apps page said "Connected" with no way to fix it."""
+    google_web.finish(state_from(google_web.start(DAD, gmail=True)), "code")
+    dad = web(DAD)
+    assert dad.get("/api/connections").json()["google"]["expired"] is False
+    google_web._save(DAD, "dad@gmail.com", {"refresh_token": "dad-refresh", "access_token": "old",
+                                            "expires_at": time.time() - 10})  # due for renewal...
+    monkeypatch.setattr(google_web.httpx, "post", lambda url, data=None, timeout=None: httpx.Response(
+        400, json={"error": "invalid_grant"}, request=httpx.Request("POST", url)))  # ...and Google refuses
+    google = dad.get("/api/connections").json()["google"]
+    assert google["expired"] is True and google["gmail"] is True  # what to reconnect
+    assert web(SAM).get("/api/connections").json()["google"]["expired"] is False  # never connected: not "expired"
 
 
 def test_changes_need_sidekicks_own_page_and_a_session(web):

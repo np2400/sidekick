@@ -2,6 +2,7 @@
 
 Owner = 111 (server-level Google sign-in), member Dad = 222 (connects his own), member Sam = 333 (doesn't).
 """
+import json
 import logging
 import time
 import urllib.parse
@@ -196,7 +197,6 @@ def test_connect_sends_a_button_and_a_short_guide(google):
 
     connect(DAD)
     assert "already connected (dad@gmail.com)" in main.connect_reply(dad)[0]
-    assert main.connect_reply(ToolContext(chat_id=OWNER))[1] is None
 
 
 def test_link_buttons_open_a_page_and_other_buttons_call_back(monkeypatch):
@@ -252,3 +252,61 @@ def test_a_member_brief_includes_their_own_email_only_if_they_connected_gmail(go
     calendar_only = ToolContext(chat_id=SAM, user_id="333", role="member", calendar=True)
     assert "email" in brief.gather(ctx=with_gmail) and seen == [with_gmail]
     assert "email" not in brief.gather(ctx=calendar_only)
+
+
+# --- The owner connecting their own, and sign-ins Google stopped accepting (Nov 1) --------------------------
+
+def test_the_owner_can_connect_their_own_google_which_replaces_the_server_sign_in(google, monkeypatch):
+    monkeypatch.setattr(google_auth, "get_access_token", lambda: "server-access")
+    owner = ToolContext(chat_id=OWNER)
+    assert google_auth.token_for(owner) == "server-access"  # nothing connected: the server's file
+    connect(OWNER, gmail=True)
+    assert google_auth.token_for(owner) == "dad-access"  # their own (the fake names every token "dad-...")
+    google_web.disconnect(OWNER)
+    assert google_auth.token_for(owner) == "server-access"
+
+
+def test_an_expired_sign_in_is_told_apart_from_google_having_a_bad_moment(google, monkeypatch):
+    connect(DAD)
+    dad = ToolContext(chat_id=DAD, user_id="222", role="member", calendar=True)
+
+    def due():
+        google_web._save(DAD, "dad@gmail.com", {"refresh_token": "dad-refresh", "access_token": "old",
+                                                "expires_at": time.time() - 10})
+    due()
+    assert not google_auth.expired(dad)  # renewed fine
+    due()
+    google.token_status = 500
+    assert not google_auth.expired(dad)  # Google failing for a moment isn't "expired"
+    google.token_status = 400  # invalid_grant: revoked, expired, or the password changed
+    assert google_auth.expired(dad)
+    assert not google_auth.expired(ToolContext(chat_id=SAM, user_id="333", role="member"))  # never connected
+
+    # The owner's server-level sign-in, the same way
+    monkeypatch.setattr(google_auth, "_client", lambda: {"token_uri": google_web.TOKEN_URI, "client_id": "c",
+                                                         "client_secret": "s"})
+    google_auth.TOKEN_FILE.write_text(json.dumps({"access_token": "old", "refresh_token": "r",
+                                                  "expires_at": time.time() - 10}))
+    assert google_auth.expired(ToolContext(chat_id=OWNER))
+    assert "Apps page" in gcal.list_events("2026-11-02T00:00:00", "2026-11-02T23:59:59",
+                                           ctx=ToolContext(chat_id=OWNER))["error"]  # how to fix it, for the model
+
+
+def test_connect_in_telegram_offers_a_button_again_once_google_stopped_accepting_it(google):
+    connect(DAD, gmail=True)
+    dad = ToolContext(chat_id=DAD, user_id="222", role="member")
+    assert main.connect_reply(dad, gmail=True)[1] is None  # "already connected"
+    google_web._save(DAD, "dad@gmail.com", {"refresh_token": "dad-refresh", "access_token": "old",
+                                            "expires_at": time.time() - 10})
+    google.token_status = 400
+    text, buttons = main.connect_reply(dad, gmail=True)
+    assert buttons and "gmail.readonly" in urllib.parse.unquote(buttons[0][1])
+
+
+def test_the_owner_connects_in_telegram_too_always_with_gmail(google):
+    owner = ToolContext(chat_id=OWNER)
+    text, buttons = main.connect_reply(owner)
+    assert "gmail.readonly" in urllib.parse.unquote(buttons[0][1])
+    assert "managed on the server" in main.disconnect_text(owner)  # nothing of theirs to disconnect yet
+    connect(OWNER, gmail=True)
+    assert "revoked" in main.disconnect_text(owner) and google_web.connection(OWNER) is None

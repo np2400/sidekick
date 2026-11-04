@@ -45,7 +45,8 @@ the deployment.
   request. If the container dies mid-answer (a crash, or an auto-deploy restart), the message is lost and nobody
   is told.
 - **Google today:** members' tokens are stored encrypted in `google_accounts`. The owner's sign-in is a
-  server-level file (`google_token.json`).
+  server-level file (`google_token.json`). (Nov 1: the owner can connect from the web too, stored like a member's
+  and used instead of the file, after the file's sign-in expired with no way to fix it from the app.)
 
 ## 3. The shape: one core, two front doors, three ways out
 

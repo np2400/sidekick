@@ -11,7 +11,7 @@ os.environ["SIDEKICK_SCHEDULER"] = "0"  # no background reminder thread during t
 import pytest  # noqa: E402
 from cryptography.fernet import Fernet  # noqa: E402
 
-from app import agent, db, vault  # noqa: E402
+from app import agent, db, google_auth, vault  # noqa: E402
 from tests.fakes import FakeWorld
 
 
@@ -29,6 +29,7 @@ def clean_state(monkeypatch, tmp_path):
     """Every test gets its own empty database (and a throwaway encryption key), so no state leaks between tests."""
     db.init(tmp_path / "test.db")
     monkeypatch.setattr(vault, "SECRETS_KEY", Fernet.generate_key().decode())
+    monkeypatch.setattr(google_auth, "TOKEN_FILE", tmp_path / "google_token.json")  # never the owner's real sign-in
     # Borrowed MCP tools would start a subprocess: tests stay hermetic with none.
     monkeypatch.setattr(agent, "discover_mcp_tools", lambda: ({}, []))
     # No worker threads (what None means to the app), reset for every test: tests just assign app.state.workers.

@@ -276,17 +276,20 @@ def task_list(account_id: int = Depends(signed_in)) -> dict:
 
 @router.get("/connections")
 def connection_list(account_id: int = Depends(signed_in)) -> dict:
-    """Which Google account Calendar and Gmail use. The owner's is the server's own sign-in (google_auth.py)."""
-    if _role(account_id) == "owner":
+    """Which Google account Calendar and Gmail use, and whether Google still accepts it. Everyone's is the one they
+    connected here; the owner without one uses the server's own sign-in (google_auth.py)."""
+    owner, found = _role(account_id) == "owner", google_web.connection(account_id)
+    if owner and found is None:
         scopes = _server_scopes()
         google = {"managed": "server", "calendar": google_web.CALENDAR_SCOPE in scopes,
                   "gmail": google_web.GMAIL_SCOPE in scopes, "email": None}
     else:
-        found = google_web.connection(account_id)
         google = {"managed": "you", "calendar": bool(found and found["calendar"]),
                   "gmail": bool(found and found["gmail"]), "email": found["email"] if found else None}
+    google["expired"] = (google["calendar"] or google["gmail"]) and google_auth.expired(_ctx(account_id))
     profile = users.profile(account_id)
-    return {"google": google, "telegram": "telegram" in profile["logins"], "sign_in": profile["logins"].get("google")}
+    return {"google": google, "owner": owner, "telegram": "telegram" in profile["logins"],
+            "sign_in": profile["logins"].get("google")}
 
 
 @router.get("/settings")
@@ -350,20 +353,19 @@ class GoogleChoice(BaseModel):
 
 @router.post("/google/connect", dependencies=[Depends(from_our_pages)])
 def google_connect(choice: GoogleChoice, account_id: int = Depends(signed_in)) -> dict:
-    """Google's sign-in page for this account. The browser goes there, then back to the Apps page."""
-    if _role(account_id) == "owner":
-        raise HTTPException(status_code=409, detail="Your Google account is connected through the server setup.")
+    """Google's sign-in page for this account. The browser goes there, then back to the Apps page. The owner's always
+    includes Gmail: their Sidekick always offers the Gmail tools."""
     if not google_web.configured():
         raise HTTPException(status_code=503, detail="Connecting Google isn't set up on this Sidekick yet.")
-    return {"url": google_web.start(account_id, gmail=choice.gmail)}
+    return {"url": google_web.start(account_id, gmail=choice.gmail or _role(account_id) == "owner")}
 
 
 @router.post("/google/disconnect", dependencies=[Depends(from_our_pages)])
 def google_disconnect(account_id: int = Depends(signed_in)) -> dict:
-    """Revoke Sidekick's access at Google and delete the stored token (Calendar and Gmail together)."""
-    if _role(account_id) == "owner":
+    """Revoke Sidekick's access at Google and delete the stored token (Calendar and Gmail together). The owner then
+    goes back to the server's own sign-in, if there is one."""
+    if not google_web.disconnect(account_id) and _role(account_id) == "owner":
         raise HTTPException(status_code=409, detail="Your Google account is connected through the server setup.")
-    google_web.disconnect(account_id)
     return connection_list(account_id)
 
 

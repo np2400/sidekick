@@ -20,7 +20,7 @@ import httpx
 
 from app import db, vault
 from app.config import GOOGLE_WEB_CLIENT_ID, GOOGLE_WEB_CLIENT_SECRET, SECRETS_KEY, SIDEKICK_DOMAIN
-from app.google_auth import GoogleAuthError
+from app.google_auth import EXPIRED, GoogleAuthError, TokenExpired
 
 log = logging.getLogger("sidekick.google_web")
 AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -145,8 +145,9 @@ def access_token(chat_id: int) -> str:
     }, timeout=15)
     if response.status_code != 200:  # invalid_grant: access revoked at Google, or the password changed
         log.error("Google refresh failed for %s: HTTP %s", chat_id, response.status_code)
-        raise GoogleAuthError("Google access for this account has expired. Connect it again on the Apps page in "
-                              "Sidekick Web, or send /connect in Telegram.")
+        if response.status_code == 400:
+            raise TokenExpired(EXPIRED)
+        raise GoogleAuthError(f"Couldn't renew Google access right now (HTTP {response.status_code}). Try again soon.")
     fresh = response.json()
     token.update(access_token=fresh["access_token"], expires_at=time.time() + fresh.get("expires_in", 3600))
     _save(chat_id, row["email"], token)

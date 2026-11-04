@@ -3,6 +3,7 @@
 Owner Neel = 111, member Dad = 222. Both use Sidekick in Telegram; each signs in to the web with a session.
 """
 import json
+import time
 from datetime import datetime, timedelta
 
 import pytest
@@ -21,7 +22,8 @@ ENDPOINTS = ["/api/me", "/api/conversations", "/api/conversations/1", "/api/remi
 def people(monkeypatch, tmp_path):
     monkeypatch.setattr(web_api, "TELEGRAM_OWNER_ID", str(OWNER))
     token = tmp_path / "google_token.json"  # the owner's server-level Google sign-in
-    token.write_text(json.dumps({"scope": f"openid {google_web.CALENDAR_SCOPE} {google_web.GMAIL_SCOPE}"}))
+    token.write_text(json.dumps({"scope": f"openid {google_web.CALENDAR_SCOPE} {google_web.GMAIL_SCOPE}",
+                                 "access_token": "owner-access", "expires_at": time.time() + 3600}))
     monkeypatch.setattr(google_auth, "TOKEN_FILE", token)
     users.ensure_owner(OWNER)
     users.remember_name(OWNER, "Neel")
@@ -87,14 +89,14 @@ def test_reminders_tasks_and_settings_are_your_own(people):
 def test_connections_show_whose_google_account_is_used(people):
     me, dad = people(OWNER), people(DAD)
     assert me.get("/api/connections").json()["google"] == {"managed": "server", "calendar": True, "gmail": True,
-                                                           "email": None}
+                                                           "email": None, "expired": False}
     assert dad.get("/api/connections").json()["google"] == {"managed": "you", "calendar": False, "gmail": False,
-                                                            "email": None}
+                                                            "email": None, "expired": False}
     with db.connect() as conn:  # Dad connects his own Calendar (/connect)
         conn.execute("INSERT INTO google_accounts (chat_id, email, scopes, token_encrypted) VALUES (?, ?, ?, 'x')",
                      (DAD, "dad@gmail.com", google_web.CALENDAR_SCOPE))
     assert dad.get("/api/connections").json()["google"] == {"managed": "you", "calendar": True, "gmail": False,
-                                                            "email": "dad@gmail.com"}
+                                                            "email": "dad@gmail.com", "expired": False}
 
 
 def test_a_removed_member_is_signed_out_of_the_api(people, monkeypatch):

@@ -1,7 +1,8 @@
 """Google OAuth 2.0 for one owner, written by hand so each step is visible.
 
 One-time setup (opens your browser):  .venv/bin/python -m app.google_auth
-After that, Sidekick calls get_access_token(), which refreshes silently.
+After that, Sidekick calls get_access_token(), which refreshes silently. Since Nov 1 the owner can also connect from
+Sidekick Web like a member (app/google_web.py); that connection, when there is one, is used instead of this file.
 """
 import base64
 import hashlib
@@ -32,6 +33,15 @@ REDIRECT_URI = f"http://localhost:{PORT}/"
 
 class GoogleAuthError(Exception):
     pass
+
+
+class TokenExpired(GoogleAuthError):
+    """Google refused the refresh token (invalid_grant): revoked, expired, or the password changed. Only signing in
+    again fixes it, so the Apps page offers Reconnect."""
+
+
+EXPIRED = ("Google access has expired. Connect Google again on the Apps page in Sidekick Web, or send /connect in "
+           "Telegram.")
 
 
 def _client() -> dict:
@@ -119,9 +129,11 @@ def get_access_token() -> str:
         "grant_type": "refresh_token",
     }, timeout=15)
     if response.status_code != 200:
-        # invalid_grant = refresh token revoked or expired (7-day limit in Testing mode)
+        # invalid_grant = refresh token revoked or expired (7-day limit in Testing mode: what happened on Oct 30)
         log.error("Google token refresh failed: HTTP %s %s", response.status_code, response.text[:200])
-        raise GoogleAuthError("Google access expired. Run: .venv/bin/python -m app.google_auth")
+        if response.status_code == 400:
+            raise TokenExpired(EXPIRED)
+        raise GoogleAuthError(f"Couldn't renew Google access right now (HTTP {response.status_code}). Try again soon.")
     fresh = response.json()
     fresh["refresh_token"] = token["refresh_token"]  # Google doesn't resend it on refresh
     _save_token(fresh)
@@ -130,12 +142,24 @@ def get_access_token() -> str:
 
 
 def token_for(ctx=None) -> str:
-    """Whose Google account a request uses: the owner's server-level sign-in (this file), or the account a member
-    connected themselves (app/google_web.py). A member can never fall back to the owner's token."""
-    if ctx is None or ctx.role == "owner":
+    """Whose Google account a request uses: the account this person connected themselves (app/google_web.py), or
+    for the owner without one, the server-level sign-in (this file). A member can never fall back to the owner's."""
+    from app import google_web  # imported here: google_web imports GoogleAuthError from this module
+    if ctx is None or (ctx.role == "owner" and google_web.connection(ctx.chat_id) is None):
         return get_access_token()
-    from app.google_web import access_token  # imported here: google_web imports GoogleAuthError from this module
-    return access_token(ctx.chat_id)
+    return google_web.access_token(ctx.chat_id)
+
+
+def expired(ctx=None) -> bool:
+    """Whether Google has stopped accepting this person's sign-in (Nov 1: an expired one still showed "Connected").
+    Asks Google only when the 1-hour access token is due for renewal."""
+    try:
+        token_for(ctx)
+    except TokenExpired:
+        return True
+    except (GoogleAuthError, VaultError, httpx.HTTPError):
+        pass  # not connected, or Google couldn't be asked right now: not known to be expired
+    return False
 
 
 def google_request(method: str, url: str, service: str, ctx=None, **kwargs) -> dict:
@@ -157,7 +181,8 @@ def google_request(method: str, url: str, service: str, ctx=None, **kwargs) -> d
     if response.status_code == 403:
         # Most often: this scope wasn't granted yet (e.g. Gmail added after the first sign-in).
         log.error("%s HTTP 403: %s", service, response.text[:200])
-        return {"error": f"Google denied access to {service} (403). Re-run: .venv/bin/python -m app.google_auth"}
+        return {"error": f"Google denied access to {service} (403). Connect Google again on the Apps page in Sidekick "
+                         f"Web, allowing {service}."}
     if response.status_code >= 400:
         log.error("%s HTTP %s: %s", service, response.status_code, response.text[:200])
         return {"error": f"{service} returned HTTP {response.status_code}.",

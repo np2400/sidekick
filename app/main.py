@@ -14,8 +14,8 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from app import (account, daily, db, google_web, jobs, memory, notifications, reminders, settings, uploads, users,
-                 web_api, web_login)
+from app import (account, daily, db, google_auth, google_web, jobs, memory, notifications, reminders, settings,
+                 uploads, users, web_api, web_login)
 from app.vault import VaultError
 from app.agent import PENDING, decide, handle_approval, run_agent
 from app.brief import TOMORROW_TRIGGERS, TRIGGERS as BRIEF_TRIGGERS, build_brief
@@ -668,12 +668,14 @@ def notify(account_id: int, text: str, buttons: list | None = None, *, kind: str
 
 
 def connect_reply(ctx: ToolContext, gmail: bool = False) -> tuple[str, list | None]:
-    """/connect (Calendar) or /connect gmail (Calendar + Gmail, read-only): a sign-in button and a short guide."""
-    if ctx.role == "owner":
-        return "Your Google account is connected through the server setup (python -m app.google_auth).", None
+    """/connect (Calendar) or /connect gmail (Calendar + Gmail, read-only): a sign-in button and a short guide. Also
+    for the owner (always with Gmail, which their Sidekick always offers), and to reconnect an expired sign-in."""
     if not google_web.configured():
         return "Connecting Google isn't set up on this Sidekick yet.", None
+    gmail = gmail or ctx.role == "owner"
     google = google_web.connection(ctx.chat_id)
+    if google and google_auth.expired(ctx):
+        google = None  # Google stopped accepting it: connect again
     account = f" ({google['email']})" if google and google["email"] else ""
     if google and google["gmail"]:
         return f"Your Google Calendar and Gmail are already connected{account}. /disconnect removes access.", None
@@ -707,10 +709,10 @@ def web_reply(ctx: ToolContext) -> tuple[str, list | None]:
 
 
 def disconnect_text(ctx: ToolContext) -> str:
-    if ctx.role == "owner":
-        return "Your Google account is managed on the server, not with /disconnect."
     if google_web.disconnect(ctx.chat_id):
         return "Google disconnected, and Sidekick's access was revoked at Google."
+    if ctx.role == "owner":
+        return "Your Google account is managed on the server, not with /disconnect."
     return "Your Google account isn't connected."
 
 
