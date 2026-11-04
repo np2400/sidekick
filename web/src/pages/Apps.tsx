@@ -25,12 +25,14 @@ const GOOGLE_APPS: AppCard[] = [
   },
 ];
 
-/** "Connected · you@gmail.com", "Connected · server setup" or "Not connected", from the real connection. */
+/** "Connected · you@gmail.com", "Connected · server setup", "Expired" or "Not connected", from the real connection
+ * (the server asks Google whether the sign-in still works). */
 function status(id: string, c: Connections | null): { on: boolean; label: string } {
   if (!c) return { on: false, label: "Not connected" };
-  const on = id === "calendar" ? c.google.calendar : c.google.gmail;
+  const granted = id === "calendar" ? c.google.calendar : c.google.gmail;
+  if (granted && c.google.expired) return { on: false, label: "Expired · connect again" };
   const whose = c.google.managed === "server" ? "server setup" : c.google.email ?? "";
-  return on ? { on, label: whose ? `Connected · ${whose}` : "Connected" } : { on, label: "Not connected" };
+  return granted ? { on: true, label: whose ? `Connected · ${whose}` : "Connected" } : { on: false, label: "Not connected" };
 }
 
 const UNVERIFIED = "Google will warn that it hasn't verified Sidekick: it's a small, invite-only app. Choose " +
@@ -68,18 +70,23 @@ export default function Apps() {
 
   function actions(app: AppCard) {
     if (!data) return null;
-    if (data.google.managed === "server") {
+    const { on } = status(app.id, data);
+    if (on && data.google.managed === "server") {
       return <span className="muted small">Connected through Sidekick's server setup (you're the owner).</span>;
     }
-    if (status(app.id, data).on) {
+    if (on) {
       return <button className="btn btn-secondary" onClick={disconnect} disabled={busy}>Disconnect Google</button>;
     }
+    // The owner's Sidekick always uses Calendar and Gmail together, so their one button connects both.
+    const gmail = data.owner || app.id === "gmail" || (data.google.expired && data.google.gmail);
+    const again = data.google.expired ? "Reconnect" : "Connect";
     return (
       <>
-        <button className="btn btn-primary" onClick={() => connect(app.id === "gmail")} disabled={busy}>
-          Connect {app.name}
+        <button className="btn btn-primary" onClick={() => connect(gmail)} disabled={busy}>
+          {data.owner ? `${again} Calendar + Gmail` : `${again} ${app.name}`}
         </button>
-        {app.id === "gmail" && !data.google.calendar && <span className="muted small">Also connects Calendar</span>}
+        {!data.owner && app.id === "gmail" && !data.google.calendar &&
+          <span className="muted small">Also connects Calendar</span>}
       </>
     );
   }
@@ -102,10 +109,11 @@ export default function Apps() {
           <Icon name="info" size={18} />
           <p>{connections.reason}</p>
         </div>
-      ) : data?.google.managed === "you" && (
+      ) : data && (data.google.managed === "you" || data.google.expired) && (
         <div className="notice static">
           <Icon name="info" size={18} />
-          <p>Calendar and Gmail are separate choices: Gmail is optional and read-only. {UNVERIFIED}</p>
+          <p>{data.owner ? "Your Sidekick uses Calendar and Gmail (read-only) together."
+            : "Calendar and Gmail are separate choices: Gmail is optional and read-only."} {UNVERIFIED}</p>
         </div>
       )}
       {problem && <div className="notice static" role="alert"><Icon name="info" size={18} /><p>{problem}</p></div>}

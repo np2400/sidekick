@@ -34,8 +34,11 @@ export type Tasks = { tasks: Task[]; elsewhere?: string };
 export type LatestBrief = { text: string; made_at: string };
 /** Each person's own: what matters to them (their words), and the kinds of automated email "For you" leaves out. */
 export type BriefPrefs = { interests: string; hidden: string[]; categories: Record<string, string>; max_interests: number };
-export type GoogleLink = { managed: "server" | "you"; calendar: boolean; gmail: boolean; email: string | null };
-export type Connections = { google: GoogleLink; telegram: boolean; sign_in: string | null };
+export type GoogleLink = {
+  managed: "server" | "you"; calendar: boolean; gmail: boolean; email: string | null;
+  expired: boolean;  // Google no longer accepts the sign-in: connect again
+};
+export type Connections = { google: GoogleLink; owner: boolean; telegram: boolean; sign_in: string | null };
 export type Preferences = {
   timezone: string; timezone_set: boolean; brief_time: string | null;
   brief: BriefPrefs;
