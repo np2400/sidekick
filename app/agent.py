@@ -622,8 +622,9 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
             log.debug("Step %d: %s args=%s", step, call.name, json.dumps(call.args))  # values: debug only
             started = time.time()
             used[call.name] = used.get(call.name, 0) + 1
-            if used[call.name] > TOOL_BUDGET.get(call.name, MAX_STEPS):
-                result = {"error": f"Limit reached: {TOOL_BUDGET[call.name]} {call.name} calls per message. "
+            limit = TOOL_BUDGET.get(call.name, MAX_STEPS)  # one lookup for both: most tools have no entry (issue #2)
+            if used[call.name] > limit:
+                result = {"error": f"Limit reached: {limit} {call.name} calls per message. "
                                    "Answer now with what you have."}
             else:
                 result = run_tool(call.name, call.args, ctx, tools)

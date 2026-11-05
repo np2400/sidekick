@@ -118,6 +118,16 @@ def test_web_tools_have_a_per_message_budget():
     assert result.reply == "Sunny."
 
 
+def test_a_tool_without_its_own_budget_is_refused_after_max_steps_calls_not_crashed(world):
+    """GitHub issue #2: the "Limit reached" text read TOOL_BUDGET[name], a KeyError for tools without an entry."""
+    llm = ScriptedProvider([call("list_tasks") for _ in range(MAX_STEPS + 1)], [text("You have 1 task.")])
+    result = run_agent("check my tasks six times", CTX, llm=llm, tools=world.tools())
+
+    assert len(world.calls) == MAX_STEPS  # the sixth call was refused, not run
+    assert f"Limit reached: {MAX_STEPS} list_tasks calls" in llm.last_tool_results()[-1]["response"]["error"]
+    assert result.reply == "You have 1 task."
+
+
 def test_tool_error_result_is_passed_to_the_model(world):
     world.fail("list_tasks", {"error": "Todoist rejected the API token (401)."})
     llm = ScriptedProvider([call("list_tasks")], [text("Your Todoist connection needs fixing.")])
