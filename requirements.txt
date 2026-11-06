@@ -3,7 +3,7 @@ uvicorn>=0.30,<1
 httpx>=0.27,<1
 pytest>=8,<10
 mcp>=1.0,<2
-mcp-server-fetch
+mcp-server-fetch>=2026.10.10  # refuses private, loopback and cloud-metadata addresses by default
 cryptography>=46,<60
 pypdf>=4,<7
 py-vapid>=1.9,<2

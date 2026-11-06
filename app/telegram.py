@@ -31,7 +31,9 @@ def call(method: str, payload: dict) -> dict:
 def send_message(chat_id: int, text: str, buttons: list[tuple[str, str]] | None = None) -> dict:
     """buttons: [(label, callback_data or https:// link)] shown in one row under the message (inline keyboard).
     A link becomes a button that opens the page, instead of a long URL in the text."""
-    payload = {"chat_id": chat_id, "text": text}
+    # No link previews: Telegram's servers would open a link in the reply to draw the card, even if nobody taps it,
+    # so a link with private data in it would leak without a click (Nov 6 security pass).
+    payload = {"chat_id": chat_id, "text": text, "link_preview_options": {"is_disabled": True}}
     if buttons:
         payload["reply_markup"] = {"inline_keyboard": [[
             {"text": label, "url": data} if data.startswith("https://") else {"text": label, "callback_data": data}
