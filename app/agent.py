@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app import freshness, native_tasks, reminders, todoist
+from app import budget, freshness, native_tasks, reminders, todoist
 from app.config import OWNER_TIMEZONE, TASK_BACKEND
 from app.db.store import PendingStore, log_action
 from app.gcal import create_event, list_events, validate_event
@@ -548,6 +548,9 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
     tools = tools_for(ctx) if tools is None else tools
     llm = llm or default_router().complete
     trace = Trace()
+    paid = budget.paid_allowed(ctx)  # a member over the spending cap gets the free models (app/budget.py)
+    if not paid:
+        trace.corrections.append("paid_capped")
     undo_id = None
     messages = [*(history or []), Message(role="user", text=user_text, images=images or [])]
     specs = tool_specs(tools)
@@ -568,7 +571,7 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
             # the model still asked for a 4th search, and that wasted step ran into the step limit).
             offered = [s for s in specs if used.get(s.name, 0) < TOOL_BUDGET.get(s.name, MAX_STEPS)]
             response = llm(messages, offered, system_prompt(tools, ctx.tz), sensitive=sensitive,
-                           **({"avoid": frozenset(avoid)} if avoid else {}))
+                           **({"avoid": frozenset(avoid)} if avoid else {}), **({} if paid else {"paid": False}))
         except AllProvidersFailed as exc:
             trace.record_failures(exc.attempts)
             if avoid:  # no other model to hand it to: honest, not invented
@@ -649,7 +652,7 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
             messages.append(Message(role="user", text=SHOWN, images=shown))
 
     # Out of steps. Don't throw away what the tools found: one last call, without tools, writes the answer.
-    reply = final_answer(user_text, messages, llm, system_prompt(tools, ctx.tz), sensitive, trace)
+    reply = final_answer(user_text, messages, llm, system_prompt(tools, ctx.tz), sensitive, trace, paid)
     if reply and (missing := ungrounded(reply, used, tools) or (needed if needed and not used.get(needed) else None)):
         reply = UNGROUNDED_REPLY[missing]
     return AgentResult(reply or STEP_LIMIT_REPLY, trace.finish("step_limit"),
@@ -719,7 +722,8 @@ STEP_LIMIT_REPLY = ("I looked but couldn't put an answer together this time. Try
                     "from or when.")
 
 
-def final_answer(user_text: str, messages: list[Message], llm, system: str, sensitive: bool, trace: Trace) -> str:
+def final_answer(user_text: str, messages: list[Message], llm, system: str, sensitive: bool, trace: Trace,
+                 paid: bool = True) -> str:
     """Graceful degradation at the step limit: answer from the tool results gathered so far, as a plain writing
     job (no tools, so it can't loop). Returns '' if no model is available."""
     found = [json.dumps({"tool": m.tool_name, "result": m.result})[:FINAL_RESULT_CHARS]
@@ -732,7 +736,7 @@ def final_answer(user_text: str, messages: list[Message], llm, system: str, sens
     for _ in range(2):  # an empty answer (Oct 28, gpt-oss after a Domino's search): the next model writes it
         try:
             response = llm([Message(role="user", text=prompt)], [], system, sensitive=sensitive,
-                           **({"avoid": frozenset(avoid)} if avoid else {}))
+                           **({"avoid": frozenset(avoid)} if avoid else {}), **({} if paid else {"paid": False}))
         except AllProvidersFailed as exc:
             trace.record_failures(exc.attempts)
             return ""

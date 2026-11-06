@@ -51,6 +51,10 @@ VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
 
 # Fair use: AI requests a member may make per day (their local day). The owner has no limit.
 MEMBER_DAILY_LIMIT = int(os.getenv("MEMBER_DAILY_LIMIT") or 50)
+# Spending caps on the paid model (OpenRouter), per UTC day: members switch to the free models once they, or everyone
+# together, reach them (app/budget.py). The owner isn't capped, but their spend counts toward the shared cap.
+PAID_DAILY_USD = float(os.getenv("PAID_DAILY_USD") or 0.25)                # everyone together: $5 lasts 20+ days
+MEMBER_PAID_DAILY_USD = float(os.getenv("MEMBER_PAID_DAILY_USD") or 0.05)  # one member: about 25-50 messages
 
 # Everything that must survive restarts and redeploys lives in one folder: the database and the Google
 # token files. Locally that's the project folder; in Docker it's /data, a volume outside the container.

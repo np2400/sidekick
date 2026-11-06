@@ -9,6 +9,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 
 from app.config import OWNER_TIMEZONE
+from app.llm.router import BILLED_PER_ANSWER
 from app.logging_setup import request_id
 
 
@@ -47,6 +48,7 @@ class Trace:
     tokens_in: int = 0
     tokens_out: int = 0
     est_cost_usd: float | None = 0.0  # paid-tier estimate; None if any model's price is unknown
+    paid_usd: float = 0.0  # what the paid provider (OpenRouter) billed, even if a free model also answered: the caps
     fallbacks: list[str] = field(default_factory=list)  # "provider:model:error_kind" for each failed try
     steps: list[Step] = field(default_factory=list)
     corrections: list[str] = field(default_factory=list)  # e.g. "ungrounded:get_weather": the agent sent it back
@@ -60,6 +62,8 @@ class Trace:
         self.tokens_out += response.tokens_out
         if self.est_cost_usd is not None:
             self.est_cost_usd = None if response.cost_usd is None else round(self.est_cost_usd + response.cost_usd, 6)
+        if response.provider in BILLED_PER_ANSWER and response.cost_usd:
+            self.paid_usd = round(self.paid_usd + response.cost_usd, 6)
         self.record_failures(response.attempts)
 
     def record_failures(self, attempts) -> None:
