@@ -16,6 +16,13 @@ brief, and **never acts on your behalf without asking**.
 - **Quality:** 515 offline tests, a 55-case live evaluation suite with a regression gate, CI/CD with automatic rollback.
 - **Cost:** about $0.001 per message.
 
+## Screenshots
+
+<p>
+  <img src="docs/images/landing-desktop.png" alt="Sidekick Web's home page on a computer, showing a real conversation about a car repair estimate" width="68%">
+  <img src="docs/images/landing-phone-dark.png" alt="The same page on a phone, in dark mode" width="28%">
+</p>
+
 ## What it can do
 
 | | Ask it… | What happens |
