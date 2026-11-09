@@ -9,6 +9,7 @@ import {
 } from "../api";
 import { EmptyState, Skeleton } from "../components/Common";
 import { Icon, type IconName } from "../components/Icons";
+import { RichText } from "../components/RichText";
 
 /** Ideas only fill the composer: they show what to ask, they are not conversations. */
 const IDEAS: { icon: IconName; text: string }[] = [
@@ -211,7 +212,8 @@ function Thread({ id, version, onView }: { id: string; version: number; onView: 
           <div key={i} className={`msg ${m.role}`}>
             {file && !file.pdf && <FileView file={file} onView={onView} />}
             {(!file || file.pdf || file.text) && (
-              <div className="msg-bubble">{file ? <>{file.pdf && <FileView file={file} onView={onView} />}{file.text}</> : m.text}</div>
+              <div className="msg-bubble">{file ? <>{file.pdf && <FileView file={file} onView={onView} />}{file.text}</>
+                : m.role === "assistant" ? <RichText text={m.text} /> : m.text}</div>
             )}
             <span className="msg-meta">{m.channel === "telegram" ? "Telegram · " : ""}{when(m.at)}</span>
           </div>

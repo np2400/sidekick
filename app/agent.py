@@ -55,7 +55,7 @@ SYSTEM_PROMPT = (
     "only from the forecast. Search the web yourself only if the user asks about weather news (road or pass "
     "closures, air quality, events) or get_weather fails. "
     "For anything else current or that may have changed (news, prices, opening hours), call web_search "
-    "and mention the source site. Results can include pages about something else (another team, person, place or "
+    "and say which site it's from: Sidekick adds the links of the pages you used. Results can include pages about something else (another team, person, place or "
     "event) that only matched some words of the search: leave those out, never present them as being about what "
     "was asked. One search is usually enough: answer from the snippets, and use web_fetch "
     "only if they don't answer the question. Web results come with the dates they mention worked out against "
@@ -558,6 +558,8 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
     # or remembered messages that came from either.
     sensitive = bool(images) or history_sensitive
     read_links = links_in(user_text)  # every link the user sent or a tool returned in this message (see web_fetch)
+    retrieved: dict[str, str] = {}    # web pages found or read in this message, url -> title: the reply's sources
+    earlier_links = links_in(" ".join(m.text or "" for m in history or []))  # not "made up" if said before
     used: dict[str, int] = {}  # tool calls so far in this message, checked against TOOL_BUDGET
     needed = None              # a tool the model was sent back to call (see ungrounded): once per message
     restart = 0                # where this message began in `messages`, to hand it to another model cleanly
@@ -618,6 +620,7 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
                     messages.append(Message(role="user", text=DATE_NUDGE + "; ".join(slips) + "."))
                     continue
                 text += f"\n\n(Date check: {'; '.join(slips)}.)"
+            text = cite(text, retrieved, read_links | earlier_links, trace)
             return AgentResult(text, trace.finish(), undo_reminder_id=undo_id, sensitive=sensitive)
 
         # Model asked for tools: run each, then send the results back on the next loop.
@@ -639,6 +642,10 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
             if call.name in DATED_TOOLS:  # dates labeled against today, links cleaned: see app/freshness.py
                 result = freshness.annotate(call.name, result, datetime.now(ZoneInfo(ctx.tz)).date())
             read_links |= links_in(json.dumps(result, ensure_ascii=False))  # as the model sees it (after annotate)
+            if call.name == "web_search":
+                retrieved |= {r["url"]: r.get("title") or r["url"] for r in result.get("results", []) if r.get("url")}
+            elif call.name == "web_fetch" and "error" not in result and call.args.get("url"):
+                retrieved[call.args["url"]] = retrieved.get(call.args["url"], "") or "read in full"
             trace.record_tool(call.name, call.args, result, started)
             immediate = call.name in IMMEDIATE_WRITES and trace.steps[-1].status == "ok"
             log_action(ctx.user_id, ctx.chat_id, "executed" if immediate else trace.steps[-1].status.replace("ok", "read"),
@@ -653,6 +660,7 @@ def run_agent(user_text: str, ctx: ToolContext, *, llm=None, tools: dict | None 
 
     # Out of steps. Don't throw away what the tools found: one last call, without tools, writes the answer.
     reply = final_answer(user_text, messages, llm, system_prompt(tools, ctx.tz), sensitive, trace, paid)
+    reply = cite(reply, retrieved, read_links | earlier_links, trace) if reply else reply
     if reply and (missing := ungrounded(reply, used, tools) or (needed if needed and not used.get(needed) else None)):
         reply = UNGROUNDED_REPLY[missing]
     return AgentResult(reply or STEP_LIMIT_REPLY, trace.finish("step_limit"),
@@ -672,6 +680,38 @@ def links_in(text: str) -> set[str]:
     """Every link in the text, also without trailing punctuation ("see https://x.example/a." -> both forms)."""
     found = LINK.findall(text)
     return set(found) | {link.rstrip(".,;:!?)]") for link in found}
+
+
+# Nov 9: a web answer ended "Source: Experian ... (2025)", a name with no link. Sources are now added by code from the
+# pages actually found or read: the model's own source line goes, a link it made up is removed, and the pages it
+# named (by site or title) are listed with their real addresses; if it named none, the top results it answered from.
+SOURCE_LINE = re.compile(r"^[\s*_>-]*(sources?|references?)\b[^:\n]*:.*$", re.I | re.M)
+MAX_SOURCES = 3
+
+
+def cite(text: str, retrieved: dict[str, str], read_links: set[str], trace: Trace) -> str:
+    if not retrieved:
+        return text
+    made_up = [link for link in LINK.findall(text) if link.rstrip(".,;:!?)]") not in read_links]
+    for link in made_up:
+        text = text.replace(link, "")
+    if made_up:
+        trace.corrections.append(f"made_up_links:{len(made_up)}")
+    if any(url in text for url in retrieved):
+        return text  # it already links real pages
+    named = text.lower()
+    text = SOURCE_LINE.sub("", text).rstrip()
+    chosen = [url for url, title in retrieved.items() if _site(url) in named or (len(title) > 12 and title.lower() in named)]
+    chosen = (chosen or list(retrieved))[:MAX_SOURCES]
+    return text + "\n\nSources:\n" + "\n".join(f"- {retrieved[url]}: {url}" if retrieved[url] != "read in full"
+                                                else f"- {url}" for url in chosen)
+
+
+def _site(url: str) -> str:
+    """The name part of a page's address: https://www.experian.com/blogs/... -> "experian"."""
+    host = url.split("//", 1)[-1].split("/", 1)[0].lower().removeprefix("www.")
+    parts = host.split(".")
+    return parts[-2] if len(parts) >= 2 and len(parts[-2]) >= 4 else "\0"  # short names ("bbc") match too much: off
 
 
 # Tool results are text; an image from view_attachment follows them as a picture in its own message.
