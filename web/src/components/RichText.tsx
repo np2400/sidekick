@@ -12,8 +12,9 @@ export function RichText({ text }: { text: string }) {
 
 const TABLE_ROW = /^\s*\|.*\|\s*$/;
 const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
-const BULLET = /^\s*[*\-•]\s+(.*)$/;
-const NUMBERED = /^\s*\d{1,3}[.)]\s+(.*)$/;
+// A list item: its indent, its marker (a bullet or "1."), its text. More indented items nest under the one above.
+const ITEM = /^(\s*)([*\-•]|\d{1,3}[.)])\s+(.*)$/;
+type Item = { indent: number; numbered: boolean; text: string; children: Item[] };
 
 function blocks(lines: string[]): ReactNode[] {
   const out: ReactNode[] = [];
@@ -24,13 +25,17 @@ function blocks(lines: string[]): ReactNode[] {
       const rows = [line];
       for (i += 2; i < lines.length && TABLE_ROW.test(lines[i]); i++) rows.push(lines[i]);
       out.push(table(rows, out.length));
-    } else if (BULLET.test(line) || NUMBERED.test(line)) {
-      const numbered = !BULLET.test(line);
-      const pattern = numbered ? NUMBERED : BULLET;
-      const items: string[] = [];
-      for (; i < lines.length && pattern.test(lines[i]); i++) items.push(lines[i].match(pattern)![1]);
-      const List = numbered ? "ol" : "ul";
-      out.push(<List key={out.length} className="md-list">{items.map((item, n) => <li key={n}>{inline(item)}</li>)}</List>);
+    } else if (ITEM.test(line)) {
+      const items: Item[] = [];
+      for (; i < lines.length && ITEM.test(lines[i]); i++) {
+        const [, indent, marker, text] = lines[i].match(ITEM)!;
+        const item = { indent: indent.length, numbered: /\d/.test(marker), text, children: [] };
+        const parent = items[items.length - 1];
+        if (parent && item.indent >= parent.indent + 2) parent.children.push(item);  // one level deep is enough
+        else if (parent && item.numbered !== items[0].numbered) break;  // "1." after bullets: a new list
+        else items.push(item);
+      }
+      out.push(list(items, out.length));
     } else if (!line.trim()) {
       i++;
     } else {
@@ -45,7 +50,16 @@ function blocks(lines: string[]): ReactNode[] {
 }
 
 function startsBlock(lines: string[], i: number): boolean {
-  return BULLET.test(lines[i]) || NUMBERED.test(lines[i]) || (TABLE_ROW.test(lines[i]) && TABLE_RULE.test(lines[i + 1] ?? ""));
+  return ITEM.test(lines[i]) || (TABLE_ROW.test(lines[i]) && TABLE_RULE.test(lines[i + 1] ?? ""));
+}
+
+function list(items: Item[], key: number): ReactNode {
+  const List = items[0].numbered ? "ol" : "ul";
+  return (
+    <List key={key} className="md-list">
+      {items.map((item, n) => <li key={n}>{inline(item.text)}{item.children.length > 0 && list(item.children, 0)}</li>)}
+    </List>
+  );
 }
 
 function cells(row: string): string[] {

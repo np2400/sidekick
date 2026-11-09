@@ -41,27 +41,54 @@ const EXAMPLES: Example[] = [
     ],
   },
   {
-    id: "web", tab: "Web search", icon: "globe", source: "Sidekick Web · Oct 27, 2026",
+    id: "web", tab: "Web search", icon: "globe", source: "Sidekick Web · Nov 9, 2026 · condensed (…)",
     turns: [
-      { from: "note", content: "Continuing a conversation about the Seattle Mariners that started in Telegram" },
-      { from: "you", content: "When is their next game ?" },
-      { from: "sidekick", steps: [{ icon: "history", label: "Remembered the team" }, { icon: "globe", label: "Searched the web" },
-                                  { icon: "external", label: "Read a page" }],
-        content: "The Mariners' 2026 season is over\u2014they finished 76-86 and missed the postseason, so they don't " +
-                 "have any upcoming games right now." },
+      { from: "note", content: "Following its comparison table of TSA PreCheck and Global Entry" },
+      { from: "you", content: "I mostly fly domestically but travel internationally once a year. Which would you " +
+                              "recommend for me, and is the extra cost worth it right now?" },
+      { from: "sidekick", steps: [{ icon: "globe", label: "Searched the web" }],
+        content: (
+          <>
+            Bottom line: If you want the most bang-for-buck and you only travel abroad once a year, TSA PreCheck is
+            usually the better choice. … Extra cost for Global Entry over PreCheck is about $42 for the whole five-year
+            period, roughly $8-9 per year. …
+            <span className="ex-sources">Sources:</span>
+            <ul className="ex-list">
+              {[["How Much Does TSA PreCheck Cost? (2026)", "https://talo.com/costs/tsa-precheck-cost"],
+                ["TSA PreCheck 2026: Cost, How to Enroll and What You Get", "https://thepointsparty.com/articles/tsa-precheck-guide"],
+                ["TSA PreCheck Program: Application, Benefits, Costs [2026]", "https://upgradedpoints.com/travel/airports/tsa-precheck-program"],
+              ].map(([title, url]) => (
+                <li key={url}><a className="msg-link" href={url} target="_blank" rel="noopener noreferrer nofollow">{title}</a></li>
+              ))}
+            </ul>
+          </>
+        ) },
+      { from: "you", content: "Doesn't Global Entry include PreCheck? For just $8 more a year, why not get that instead?" },
+      { from: "sidekick",
+        content: "Yes\u2014Global Entry automatically gives you TSA PreCheck. The only extra you pay is the higher enrollment " +
+                 "fee (about $120 for five years vs. $78 for PreCheck), which works out to roughly $8-$9 more per year. … " +
+                 "In short, the extra $8-$9 per year is usually worth it for the added customs benefit, as long as you're " +
+                 "okay with the longer enrollment timeline." },
     ],
   },
   {
-    id: "calendar", tab: "Calendar", icon: "calendar",
-    source: "Sidekick Web · Oct 26, 2026",
+    id: "brief", tab: "Morning brief", icon: "sunrise", source: "Telegram · Nov 6, 2026",
     turns: [
-      { from: "you", content: "add sidekick web test to my calendar tomorrow at 3pm" },
-      { from: "sidekick", steps: [{ icon: "calendar", label: "Proposed an event: nothing created yet" }],
-        content: "I'll add a calendar event titled \u201csidekick web test\u201d for tomorrow, October 27, from 3pm to " +
-                 "4pm PT. Should I go ahead? Reply \u201cyes\u201d to confirm or \u201cno\u201d to cancel." },
-      { from: "you", content: "✅ Yes" },
-      { from: "sidekick", steps: [{ icon: "calendar", label: "Added to Google Calendar" }],
-        content: "✅ Added to calendar: sidekick web test (Tue Oct 27, 03:00 PM)" },
+      { from: "note", content: "Sent on its own at 8:00 AM" },
+      { from: "sidekick", steps: [{ icon: "calendar", label: "Checked the calendar" }, { icon: "mail", label: "Sorted the inbox" }],
+        content: (
+          <>
+            ☀️ Friday Nov 06<br />
+            <span className="ex-label">Today:</span><br />
+            Nothing on your calendar.<br />
+            <span className="ex-label">Inbox highlights:</span><br />
+            Y Combinator – follow-up on your Startup job application; they need to know if you’re still looking.<br />
+            Glassdoor Jobs – new job listings in Irvine, CA, including data link analyst and AI engineer roles.<br />
+            Indeed – Junior AI and Automation Engineer position at Myriad360 matching your AI background.<br />
+            <span className="ex-label">Next step:</span><br />
+            Reply to Y Combinator confirming your continued interest.
+          </>
+        ) },
     ],
   },
 ];
@@ -94,7 +121,7 @@ function Conversation({ example }: { example: Example }) {
 }
 
 function Showcase() {
-  // A link can open a given example, e.g. /#example-calendar
+  // A link can open a given example, e.g. /#example-brief
   const linked = EXAMPLES.find((e) => window.location.hash === `#example-${e.id}`);
   const [active, setActive] = useState(linked?.id ?? EXAMPLES[0].id);
   const example = EXAMPLES.find((e) => e.id === active)!;
