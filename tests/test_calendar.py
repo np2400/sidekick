@@ -27,7 +27,8 @@ def google(monkeypatch):
 def test_a_name_search_looks_four_months_ahead_and_returns_the_exact_place(google):
     result = gcal.list_events(query="Nilesh")
     assert google["q"] == "Nilesh"
-    window = datetime.fromisoformat(google["timeMax"]) - datetime.fromisoformat(google["timeMin"])
+    # Calendar days, not hours: from late November the window crosses March's clock change, one hour short (Nov 23)
+    window = datetime.fromisoformat(google["timeMax"]).date() - datetime.fromisoformat(google["timeMin"]).date()
     assert window.days == gcal.SEARCH_DAYS
 
     event = result["events"][0]

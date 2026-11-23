@@ -104,8 +104,9 @@ export default function AppLayout() {
                 {conversations.data.map((c) => (
                   <li key={c.id}>
                     <NavLink to={`/app/chat/${c.id}`} className={({ isActive }) => (isActive ? "active" : "")}
-                      title={c.origin === "telegram" ? "Started in Telegram" : undefined}>
+                      title={c.origin === "telegram" ? "Started in Telegram" : c.origin === "brief" ? "Your morning briefs" : undefined}>
                       {c.origin === "telegram" && <Icon name="send" size={13} />}
+                      {c.origin === "brief" && <Icon name="sunrise" size={13} />}
                       <span className="chat-title">{c.title}</span>
                     </NavLink>
                   </li>

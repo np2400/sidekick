@@ -203,7 +203,8 @@ function Thread({ id, version, onView }: { id: string; version: number; onView: 
             title="Delete this conversation"><Icon name="trash" size={16} /></button>
         </div>
         <p className="muted small">
-          {thread.origin === "telegram" ? "Started in Telegram" : "Started here"} · kept for 30 days after the last message
+          {thread.origin === "brief" ? "Your morning briefs, one a day · each kept for 30 days"
+            : `${thread.origin === "telegram" ? "Started in Telegram" : "Started here"} · kept for 30 days after the last message`}
         </p>
       </header>
       {thread.messages.map((m, i) => {

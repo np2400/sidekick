@@ -68,7 +68,8 @@ def send_brief(send, ctx: ToolContext) -> None:
                     else "☀️ Good morning!\n\n" + text)
         send(ctx.chat_id, greeting, kind="brief", ref=f"brief:{today}")
         save_latest(ctx.chat_id, text)  # Sidekick Web's Dashboard shows it
-        memory.remember(ctx.chat_id, "[morning brief]", text, sensitive=True)  # it can include email previews
+        # Into their one brief conversation; "web" for someone without Telegram, so the page doesn't say Telegram
+        memory.remember_brief(ctx.chat_id, text, "telegram" if users.telegram_chat(ctx.chat_id) else "web")
         log.info("Morning brief sent to %s", ctx.chat_id)
     except Exception:
         log.exception("Morning brief failed for %s", ctx.chat_id)

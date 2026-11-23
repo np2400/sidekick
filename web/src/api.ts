@@ -14,14 +14,14 @@ export type Result<T> = Ready<T> | Unavailable | SignedOut;
 
 export type Session = { name: string; role: "owner" | "member"; telegram: boolean; google: string | null };
 export type Conversation = {
-  id: number; title: string; origin: "telegram" | "web"; started: string; updated: string; messages: number;
+  id: number; title: string; origin: "telegram" | "web" | "brief"; started: string; updated: string; messages: number;
 };
 export type Message = { role: "user" | "assistant"; text: string; channel: "telegram" | "web"; at: string };
 export type Attached = { type: "image/jpeg" | "application/pdf"; name: string };
 export type Waiting = { job_id: number; text: string; attachment: Attached | null };
 export type Proposal = { id: number; action: string };
 export type Transcript = {
-  id: number; title: string; origin: "telegram" | "web"; messages: Message[];
+  id: number; title: string; origin: "telegram" | "web" | "brief"; messages: Message[];
   waiting: Waiting[];          // sent, still being answered
   proposal: Proposal | null;   // a change waiting for your yes or no
   recent_file: (Attached & { until: string }) | null;  // a photo or PDF more questions can still use

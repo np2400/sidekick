@@ -239,6 +239,31 @@ def import_legacy() -> int:
     return len(rows)
 
 
+def remember_brief(account_id: int, text: str, channel: str = "telegram") -> int | None:
+    """Today's morning brief, added to this person's one brief conversation (origin 'brief') instead of starting a
+    new one each morning (Nov 23: the sidebar filled with "Morning brief"). A reply soon after it continues that
+    conversation, as for any Telegram message; briefs older than KEEP_DAYS are dropped from it, as everywhere."""
+    try:
+        boxes = [vault.lock_text(t[:MAX_SAVED_CHARS]) for t in ("[morning brief]", text)]
+        title = vault.lock_text(_title("[morning brief]"))
+    except vault.VaultError:
+        log.warning("Brief not saved: SECRETS_KEY is not set (history is never stored unencrypted)")
+        return None
+    with db.connect() as conn:
+        row = conn.execute("SELECT id FROM conversations WHERE account_id = ? AND origin = 'brief' ORDER BY id DESC "
+                           "LIMIT 1", (account_id,)).fetchone()
+        conversation_id = row["id"] if row else _start(conn, account_id, "brief", title)
+        conn.execute("DELETE FROM chat_messages WHERE conversation_id = ? AND created_at < datetime('now', ?)",
+                     (conversation_id, f"-{KEEP_DAYS} days"))
+        conn.executemany("INSERT INTO chat_messages (conversation_id, account_id, role, text_encrypted, sensitive, "
+                         "channel) VALUES (?, ?, ?, ?, 1, ?)",  # sensitive: it can include email previews
+                         [(conversation_id, account_id, role, box, channel)
+                          for role, box in zip(("user", "assistant"), boxes)])
+        conn.execute("UPDATE conversations SET last_message_at = datetime('now'), closed = 0 WHERE id = ?",
+                     (conversation_id,))
+    return conversation_id
+
+
 def _current(conn, account_id: int) -> int | None:
     """The Telegram conversation a new message continues: the one of the last Telegram message, if that was less
     than 2 hours ago and /new hasn't closed it."""
