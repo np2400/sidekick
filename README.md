@@ -7,6 +7,9 @@ real people. Text it on **Telegram** or use **Sidekick Web**, an installable app
 the same conversations. It answers questions about your day and your email, reminds you of things, sends a morning
 brief, and **never acts on your behalf without asking**.
 
+**Live:** [neel-sidekick.duckdns.org](https://neel-sidekick.duckdns.org) shows real conversations. Using it is
+invite-only for now: ask me for an invite link.
+
 **At a glance**
 
 - **Live:** running 24/7 on AWS since October 2026; invite-only, used daily by me and my family.
