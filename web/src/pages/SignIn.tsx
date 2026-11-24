@@ -9,8 +9,8 @@ export default function SignIn() {
         <Logo size={40} withName={false} />
         <h1>Sign in to Sidekick</h1>
         <p className="muted">
-          Sign in with your Google account. This only tells Sidekick who you are: no access to your email or
-          calendar. Connecting Calendar or Gmail is a separate, optional step.
+          Sidekick only gets your email address from Google, to know it's you. It can't see your email or calendar
+          unless you choose to connect them later, on the Apps page.
         </p>
 
         <a className="google-btn" href="/auth/google/start">
@@ -20,13 +20,15 @@ export default function SignIn() {
 
         <div className="divider" />
         <p className="muted small">
-          <strong>First time here?</strong> Sidekick is invite-only: open the invite link you were sent, and sign in
-          with Google there. If you already use Sidekick in Telegram, send <code>/web</code> to the bot and open the
-          link it gives you; from then on this button signs you in.
+          <strong>New here?</strong> Sidekick is invite-only. Open the invite link you were sent and continue with
+          Google there. No Telegram needed.
         </p>
-        <a className="text-link" href="https://t.me/Np_Sidekick_bot" target="_blank" rel="noreferrer">
-          Open Sidekick in Telegram <Icon name="external" size={14} />
-        </a>
+        <p className="muted small">
+          Already use Sidekick in Telegram? Send <code>/web</code> to the bot to use the same account here.{" "}
+          <a className="text-link" href="https://t.me/Np_Sidekick_bot" target="_blank" rel="noreferrer">
+            Open Telegram <Icon name="external" size={14} />
+          </a>
+        </p>
       </div>
     </main>
   );
